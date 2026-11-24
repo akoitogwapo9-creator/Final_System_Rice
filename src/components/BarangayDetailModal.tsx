@@ -1,7 +1,17 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Barangay, FarmParcel } from '../types';
-import { X, MapPin, User, Phone, Wheat, Droplets, Compass, Layers, ChevronRight } from 'lucide-react';
+import { X, MapPin, User, Phone, Wheat, Droplets, Compass, Layers, ChevronRight, Pencil, Save, RotateCcw, Check } from 'lucide-react';
 import { getLandPhoto } from '../data/photos';
+
+const TERRAIN_OPTIONS = [
+  'Coastal Plains',
+  'River Basin Irrigated',
+  'Upland & River Basin',
+  'Lowland Alluvial',
+  'Upland Terrace',
+  'Lowland Alluvial & Coast',
+  'Lowland Alluvial & Coastal'
+];
 
 interface BarangayDetailModalProps {
   barangay: Barangay | null;
@@ -9,6 +19,8 @@ interface BarangayDetailModalProps {
   onClose: () => void;
   onSelectParcel: (parcel: FarmParcel) => void;
   onViewOnMap: (barangay: Barangay) => void;
+  onUpdateBarangay?: (name: string, updates: Partial<Barangay>) => void;
+  canEdit?: boolean;
 }
 
 export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
@@ -16,13 +28,118 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
   parcels,
   onClose,
   onSelectParcel,
-  onViewOnMap
+  onViewOnMap,
+  onUpdateBarangay,
+  canEdit = true
 }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [saveNotice, setSaveNotice] = useState('');
+
+  // Draft state for editable fields
+  const [draftFocalPerson, setDraftFocalPerson] = useState('');
+  const [draftContactNumber, setDraftContactNumber] = useState('');
+  const [draftTerrain, setDraftTerrain] = useState('');
+  const [draftPuroks, setDraftPuroks] = useState(0);
+  const [draftTotalAreaHa, setDraftTotalAreaHa] = useState(0);
+  const [draftIrrigatedAreaHa, setDraftIrrigatedAreaHa] = useState(0);
+  const [draftRainfedAreaHa, setDraftRainfedAreaHa] = useState(0);
+  const [draftLat, setDraftLat] = useState(0);
+  const [draftLng, setDraftLng] = useState(0);
+
+  // Populate drafts when barangay changes or edit mode is entered
+  useEffect(() => {
+    if (barangay) {
+      resetDrafts(barangay);
+    }
+  }, [barangay]);
+
+  const resetDrafts = (b: Barangay) => {
+    setDraftFocalPerson(b.focalPerson || '');
+    setDraftContactNumber(b.contactNumber || '');
+    setDraftTerrain(b.terrain || '');
+    setDraftPuroks(b.puroks || 0);
+    setDraftTotalAreaHa(b.totalAreaHa || 0);
+    setDraftIrrigatedAreaHa(b.irrigatedAreaHa || 0);
+    setDraftRainfedAreaHa(b.rainfedAreaHa || 0);
+    setDraftLat(b.lat || 0);
+    setDraftLng(b.lng || 0);
+  };
+
   if (!barangay) return null;
 
   const brgyParcels = parcels.filter(
     (p) => p.barangay.toLowerCase() === barangay.name.toLowerCase()
   );
+
+  const handleEnterEdit = () => {
+    resetDrafts(barangay);
+    setIsEditing(true);
+    setSaveNotice('');
+  };
+
+  const handleCancelEdit = () => {
+    resetDrafts(barangay);
+    setIsEditing(false);
+    setSaveNotice('');
+  };
+
+  const handleSave = () => {
+    const updates: Partial<Barangay> = {
+      focalPerson: draftFocalPerson.trim(),
+      contactNumber: draftContactNumber.trim(),
+      terrain: draftTerrain,
+      puroks: draftPuroks,
+      totalAreaHa: draftTotalAreaHa,
+      irrigatedAreaHa: draftIrrigatedAreaHa,
+      rainfedAreaHa: draftRainfedAreaHa,
+      lat: draftLat,
+      lng: draftLng
+    };
+
+    if (onUpdateBarangay) {
+      onUpdateBarangay(barangay.name, updates);
+    }
+
+    // Also persist to localStorage (same key used by BarangaysView / GIS Measure)
+    try {
+      const allSettings = JSON.parse(localStorage.getItem('silago_gis_measure_settings') || '{}');
+      allSettings[barangay.name] = {
+        ...allSettings[barangay.name],
+        focalPerson: updates.focalPerson,
+        contactNumber: updates.contactNumber,
+        zone: updates.terrain,
+        puroks: updates.puroks,
+        areaHa: updates.totalAreaHa,
+        irrigatedAreaHa: updates.irrigatedAreaHa,
+        rainfedAreaHa: updates.rainfedAreaHa,
+        centerLat: updates.lat,
+        centerLng: updates.lng
+      };
+      localStorage.setItem('silago_gis_measure_settings', JSON.stringify(allSettings));
+    } catch {
+      // localStorage might be unavailable
+    }
+
+    setIsEditing(false);
+    setSaveNotice(`Barangay ${barangay.name} details saved successfully.`);
+    setTimeout(() => setSaveNotice(''), 4000);
+  };
+
+  // Initials for the avatar
+  const displayFocalPerson = isEditing ? draftFocalPerson : (barangay.focalPerson || '');
+  const initials = displayFocalPerson
+    .split(' ')
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join('');
+
+  // The input style classes
+  const inputClass =
+    'w-full px-2.5 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-medium text-slate-900 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 outline-none transition shadow-2xs';
+  const selectClass =
+    'w-full px-2.5 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-medium text-slate-900 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 outline-none transition shadow-2xs cursor-pointer';
+  const numberInputClass =
+    'w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-semibold text-slate-900 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 outline-none transition shadow-2xs text-center';
 
   return (
     <div className="fixed inset-0 z-100 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
@@ -36,49 +153,97 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
                   {barangay.asfStatus}
                 </span>
                 <span className="text-xs text-slate-300">
-                  Sector: {barangay.terrain}
+                  Sector: {isEditing ? draftTerrain : barangay.terrain}
                 </span>
               </div>
               <h2 className="text-2xl sm:text-3xl font-serif font-bold text-white mt-1">
                 Barangay {barangay.name}
               </h2>
               <p className="text-xs text-emerald-200/80 mt-0.5">
-                Municipality of Silago, Southern Leyte • {barangay.puroks} Designated Puroks / Sitios
+                Municipality of Silago, Southern Leyte • {isEditing ? draftPuroks : barangay.puroks} Designated Puroks / Sitios
               </p>
             </div>
-            <button
-              onClick={onClose}
-              type="button"
-              className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {canEdit && !isEditing && (
+                <button
+                  onClick={handleEnterEdit}
+                  type="button"
+                  className="p-1.5 rounded-lg text-emerald-400 hover:text-white hover:bg-emerald-500/20 transition cursor-pointer"
+                  title="Edit Barangay Details"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              )}
+              <button
+                onClick={onClose}
+                type="button"
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         </div>
 
+        {/* Save Notice */}
+        {saveNotice && (
+          <div className="mx-5 mt-4 p-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-xs font-semibold text-emerald-900 flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-700 shrink-0" />
+            <span>{saveNotice}</span>
+          </div>
+        )}
+
         {/* Content Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-6">
+
           {/* LFT Officer Info Card */}
           <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3.5">
+            <div className="flex items-center gap-3.5 min-w-0 flex-1">
               <div className="w-12 h-12 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0">
-                {barangay.focalPerson.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+                {initials || <User className="w-5 h-5" />}
               </div>
-              <div>
-                <span className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider block">
-                  Designated Local Farm Technician (LFT)
-                </span>
-                <h4 className="text-sm font-bold text-slate-900">{barangay.focalPerson}</h4>
-                <div className="flex items-center gap-3 text-xs text-slate-600 mt-0.5">
-                  <span className="flex items-center gap-1">
-                    <Phone className="w-3.5 h-3.5 text-emerald-600" />
-                    {barangay.contactNumber}
+              {isEditing ? (
+                <div className="space-y-2 flex-1 min-w-0">
+                  <span className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider block">
+                    Designated Local Farm Technician (LFT)
                   </span>
-                  <span className="font-mono text-[11px] text-slate-400">
-                    @{barangay.username}
-                  </span>
+                  <input
+                    type="text"
+                    value={draftFocalPerson}
+                    onChange={(e) => setDraftFocalPerson(e.target.value)}
+                    placeholder="Focal Person Full Name"
+                    className={inputClass}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Phone className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <input
+                      type="text"
+                      value={draftContactNumber}
+                      onChange={(e) => setDraftContactNumber(e.target.value)}
+                      placeholder="e.g. 0945-123-4567"
+                      className={inputClass}
+                    />
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider block">
+                    Designated Local Farm Technician (LFT)
+                  </span>
+                  <h4 className="text-sm font-bold text-slate-900">{barangay.focalPerson || '—'}</h4>
+                  <div className="flex items-center gap-3 text-xs text-slate-600 mt-0.5">
+                    <span className="flex items-center gap-1">
+                      <Phone className="w-3.5 h-3.5 text-emerald-600" />
+                      {barangay.contactNumber || '—'}
+                    </span>
+                    {barangay.username && (
+                      <span className="font-mono text-[11px] text-slate-400">
+                        @{barangay.username}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             <button
               type="button"
@@ -93,47 +258,153 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
             </button>
           </div>
 
+          {/* Terrain & Puroks (Editable) */}
+          {isEditing && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">
+                  Agro-Ecosystem / Terrain Zone
+                </label>
+                <select
+                  value={draftTerrain}
+                  onChange={(e) => setDraftTerrain(e.target.value)}
+                  className={selectClass}
+                >
+                  {TERRAIN_OPTIONS.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">
+                  Designated Puroks / Sitios
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={30}
+                  value={draftPuroks}
+                  onChange={(e) => setDraftPuroks(parseInt(e.target.value) || 0)}
+                  className={numberInputClass}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Key Metrics Bento */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Rice Area</span>
-              <strong className="text-lg font-serif font-black text-slate-900">
-                {barangay.totalAreaHa.toFixed(1)} ha
-              </strong>
+          {isEditing ? (
+            <div className="space-y-3">
+              <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                Rice Area Breakdown (Hectares)
+              </h4>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-bold text-slate-400 block text-center">Total Rice Area</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={0}
+                    value={draftTotalAreaHa}
+                    onChange={(e) => setDraftTotalAreaHa(parseFloat(e.target.value) || 0)}
+                    className={numberInputClass}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-bold text-blue-600 block text-center">NIA Irrigated</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={0}
+                    value={draftIrrigatedAreaHa}
+                    onChange={(e) => setDraftIrrigatedAreaHa(parseFloat(e.target.value) || 0)}
+                    className={`${numberInputClass} border-blue-300 focus:ring-blue-500/30 focus:border-blue-500`}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-bold text-amber-700 block text-center">Rainfed Sector</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={0}
+                    value={draftRainfedAreaHa}
+                    onChange={(e) => setDraftRainfedAreaHa(parseFloat(e.target.value) || 0)}
+                    className={`${numberInputClass} border-amber-300 focus:ring-amber-500/30 focus:border-amber-500`}
+                  />
+                </div>
+              </div>
             </div>
-            <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl text-center">
-              <span className="text-[10px] uppercase font-bold text-blue-600 block">NIA Irrigated</span>
-              <strong className="text-lg font-serif font-black text-blue-900">
-                {barangay.irrigatedAreaHa.toFixed(1)} ha
-              </strong>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-center">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Rice Area</span>
+                <strong className="text-lg font-serif font-black text-slate-900">
+                  {barangay.totalAreaHa.toFixed(1)} ha
+                </strong>
+              </div>
+              <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl text-center">
+                <span className="text-[10px] uppercase font-bold text-blue-600 block">NIA Irrigated</span>
+                <strong className="text-lg font-serif font-black text-blue-900">
+                  {barangay.irrigatedAreaHa.toFixed(1)} ha
+                </strong>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-center">
+                <span className="text-[10px] uppercase font-bold text-amber-700 block">Rainfed Sector</span>
+                <strong className="text-lg font-serif font-black text-amber-900">
+                  {barangay.rainfedAreaHa.toFixed(1)} ha
+                </strong>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-center">
+                <span className="text-[10px] uppercase font-bold text-emerald-700 block">Parcels Mapped</span>
+                <strong className="text-lg font-serif font-black text-emerald-900">
+                  {brgyParcels.length}
+                </strong>
+              </div>
             </div>
-            <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-center">
-              <span className="text-[10px] uppercase font-bold text-amber-700 block">Rainfed Sector</span>
-              <strong className="text-lg font-serif font-black text-amber-900">
-                {barangay.rainfedAreaHa.toFixed(1)} ha
-              </strong>
-            </div>
-            <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl text-center">
-              <span className="text-[10px] uppercase font-bold text-emerald-700 block">Parcels Mapped</span>
-              <strong className="text-lg font-serif font-black text-emerald-900">
-                {brgyParcels.length}
-              </strong>
-            </div>
-          </div>
+          )}
 
           {/* Coordinates & Terrain */}
-          <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2">
-              <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span className="font-mono text-slate-600">
-                Lat: {barangay.lat.toFixed(4)}, Lng: {barangay.lng.toFixed(4)}
-              </span>
+          {isEditing ? (
+            <div className="space-y-2">
+              <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                Center Coordinates
+              </h4>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-500 block">Latitude (°N)</label>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={draftLat}
+                    onChange={(e) => setDraftLat(parseFloat(e.target.value) || 0)}
+                    className={numberInputClass}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold text-slate-500 block">Longitude (°E)</label>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={draftLng}
+                    onChange={(e) => setDraftLng(parseFloat(e.target.value) || 0)}
+                    className={numberInputClass}
+                  />
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-blue-600 shrink-0" />
-              <span className="text-slate-700 font-semibold">{barangay.terrain}</span>
+          ) : (
+            <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span className="font-mono text-slate-600">
+                  Lat: {barangay.lat.toFixed(4)}, Lng: {barangay.lng.toFixed(4)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 text-blue-600 shrink-0" />
+                <span className="text-slate-700 font-semibold">{barangay.terrain}</span>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Registered Rice Parcels List */}
           <div>
@@ -191,14 +462,37 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
-          >
-            Close
-          </button>
+        <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+          {isEditing ? (
+            <>
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-sm"
+              >
+                <Save className="w-3.5 h-3.5" />
+                Save Barangay
+              </button>
+            </>
+          ) : (
+            <div className="flex items-center justify-end w-full">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

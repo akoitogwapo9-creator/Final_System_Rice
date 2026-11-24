@@ -22,6 +22,36 @@ export const OFFICIAL_15_BARANGAYS = [
 
 export type OfficialBarangay = typeof OFFICIAL_15_BARANGAYS[number];
 
+// Official Classification: 9 Coastal, 6 Upland
+export const COASTAL_BARANGAYS: OfficialBarangay[] = [
+  'Balagawan',
+  'Hingatungan',
+  'Laguna',
+  'Mercedes',
+  'Poblacion District 1',
+  'Poblacion District 2',
+  'Puntana',
+  'San Roque',
+  'Sap-ang'
+];
+
+export const UPLAND_BARANGAYS: OfficialBarangay[] = [
+  'Calubian',
+  'Catmon',
+  'Imelda',
+  'Katipunan',
+  'Salvacion',
+  'San Isidro'
+];
+
+export function getBarangayZone(name: string): 'Coastal' | 'Upland' {
+  const norm = (name || '').trim().toLowerCase();
+  if (UPLAND_BARANGAYS.some((b) => b.toLowerCase() === norm || norm.includes(b.toLowerCase()))) {
+    return 'Upland';
+  }
+  return 'Coastal';
+}
+
 // Alias for compatibility across codebase
 export const ASSIGNED_10_BARANGAYS = OFFICIAL_15_BARANGAYS;
 export type AssignedBarangay = typeof OFFICIAL_15_BARANGAYS[number];

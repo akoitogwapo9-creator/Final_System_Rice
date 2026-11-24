@@ -97,6 +97,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
   // Check if current user is restricted from editing this parcel
   const isRestrictedForEditing = useMemo(() => {
     if (!editingParcel) return false;
+    if (!currentUser || currentUser.role === 'Central Admin') return false;
     return !isUserAuthorizedForBarangay(currentUser, editingParcel.barangay);
   }, [editingParcel, currentUser]);
 
@@ -756,7 +757,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     const cleanContact = rawContact.replace(/\D/g, '');
     const targetBrgy = formData.barangay || effectiveDefaultBarangay;
 
-    if (editingParcel && !isUserAuthorizedForBarangay(currentUser, editingParcel.barangay)) {
+    if (editingParcel && currentUser && currentUser.role !== 'Central Admin' && !isUserAuthorizedForBarangay(currentUser, editingParcel.barangay)) {
       setActiveStep(2);
       setError(
         `Access Denied: This parcel is located in Brgy. ${editingParcel.barangay}. You (${currentUser?.name}) are only authorized to manage parcels in: ${assignedBarangays?.join(', ')}.`

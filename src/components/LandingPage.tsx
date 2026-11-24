@@ -95,7 +95,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     officeContactInfo,
     municipalBranding,
     landingPageConfig,
-    legalDecrees
+    legalDecrees,
+    permissions
   } = useApp();
 
   const [selectedBarangayModal, setSelectedBarangayModal] = useState<Barangay | null>(null);
@@ -137,18 +138,65 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     return set.size;
   }, [parcels]);
 
+  // Saved barangay metadata settings from local storage
+  const getSavedSettings = (): Record<string, any> => {
+    try {
+      return JSON.parse(localStorage.getItem('silago_gis_measure_settings') || '{}');
+    } catch {
+      return {};
+    }
+  };
+  const [savedSettings, setSavedSettings] = useState<Record<string, any>>(getSavedSettings);
+
+  const liveBarangays = useMemo(() => {
+    return BARANGAYS.map((b) => {
+      const s = savedSettings[b.name] || {};
+      return {
+        ...b,
+        terrain: s.zone || b.terrain,
+        puroks: s.puroks ?? b.puroks,
+        totalAreaHa: s.areaHa ?? b.totalAreaHa,
+        irrigatedAreaHa: s.irrigatedAreaHa ?? b.irrigatedAreaHa,
+        rainfedAreaHa: s.rainfedAreaHa ?? b.rainfedAreaHa,
+        focalPerson: s.focalPerson || b.focalPerson,
+        contactNumber: s.contactNumber || b.contactNumber,
+        lat: Number(s.centerLat ?? b.lat),
+        lng: Number(s.centerLng ?? b.lng),
+      };
+    });
+  }, [savedSettings]);
+
+  const handleUpdateBarangay = (name: string, updates: Partial<Barangay>) => {
+    setSavedSettings((prev) => ({
+      ...prev,
+      [name]: {
+        ...prev[name],
+        focalPerson: updates.focalPerson,
+        contactNumber: updates.contactNumber,
+        zone: updates.terrain,
+        puroks: updates.puroks,
+        areaHa: updates.totalAreaHa,
+        irrigatedAreaHa: updates.irrigatedAreaHa,
+        rainfedAreaHa: updates.rainfedAreaHa,
+        centerLat: updates.lat,
+        centerLng: updates.lng,
+      }
+    }));
+    setSelectedBarangayModal((prev) => (prev && prev.name === name ? { ...prev, ...updates } : prev));
+  };
+
   // Barangay filter: ALL, COASTAL, INLAND
   const [barangayFilter, setBarangayFilter] = useState<'ALL' | 'COASTAL' | 'INLAND'>('ALL');
 
   const filteredBarangays = useMemo(() => {
     if (barangayFilter === 'COASTAL') {
-      return BARANGAYS.filter((b) => b.terrain.toLowerCase().includes('coastal'));
+      return liveBarangays.filter((b) => b.terrain.toLowerCase().includes('coastal'));
     }
     if (barangayFilter === 'INLAND') {
-      return BARANGAYS.filter((b) => !b.terrain.toLowerCase().includes('coastal'));
+      return liveBarangays.filter((b) => !b.terrain.toLowerCase().includes('coastal'));
     }
-    return BARANGAYS;
-  }, [barangayFilter]);
+    return liveBarangays;
+  }, [barangayFilter, liveBarangays]);
 
   // Scroll to section helper
   const scrollToSection = (id: string) => {
@@ -1048,6 +1096,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           if (onSelectBarangayForMap) onSelectBarangayForMap(b);
           onNavigateToPortalTab('map');
         }}
+        onUpdateBarangay={handleUpdateBarangay}
+        canEdit={true}
       />
 
       {selectedParcelModal && (

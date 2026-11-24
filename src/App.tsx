@@ -181,7 +181,7 @@ const AppContent: React.FC = () => {
           if (!currentUser && !publicAllowedTabs.includes(target)) {
             return 'map';
           }
-          if (currentUser && currentUser.role !== 'Central Admin' && ['dashboard', 'accounts', 'photos', 'registry_form', 'barangays', 'gis_measure'].includes(target)) {
+          if (currentUser && currentUser.role !== 'Central Admin' && ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure'].includes(target)) {
             return 'lft_dashboard';
           }
           return target;
@@ -315,7 +315,7 @@ const AppContent: React.FC = () => {
       return;
     }
     if (!isCentralAdmin) {
-      if (activeTab === 'dashboard' || activeTab === 'accounts' || activeTab === 'photos' || activeTab === 'registry_form' || activeTab === 'barangays' || activeTab === 'gis_measure') {
+      if (activeTab === 'dashboard' || activeTab === 'accounts' || activeTab === 'photos' || activeTab === 'registry_form' || activeTab === 'gis_measure') {
         setActiveTab('lft_dashboard');
       }
     }
@@ -364,8 +364,8 @@ const AppContent: React.FC = () => {
     tab: PortalTab,
     subTab?: 'profile' | 'municipal' | 'featured_card' | 'display' | 'media' | 'landing'
   ) => {
-    const adminOnlyTabs: PortalTab[] = ['dashboard', 'accounts', 'photos', 'registry_form', 'barangays', 'gis_measure'];
-    const authRequiredTabs: PortalTab[] = [...adminOnlyTabs, 'subsidies', 'settings', 'account', 'lft_dashboard', 'brgy_dashboard'];
+    const adminOnlyTabs: PortalTab[] = ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure'];
+    const authRequiredTabs: PortalTab[] = [...adminOnlyTabs, 'barangays', 'subsidies', 'settings', 'account', 'lft_dashboard', 'brgy_dashboard'];
 
     if (!currentUser && authRequiredTabs.includes(tab)) {
       setIsLoginModalOpen(true);
@@ -1066,7 +1066,7 @@ const AppContent: React.FC = () => {
                 </div>
               )}
               {activeTab === 'legal_decrees' && <LegalDecreesView />}
-              {activeTab === 'barangays' && isCentralAdmin && <BarangaysView onNavigate={setActiveTab} onMeasureBarangay={(barangay) => {
+              {activeTab === 'barangays' && (isCentralAdmin || permissions.isLftOfficer) && <BarangaysView onNavigate={setActiveTab} onMeasureBarangay={(barangay) => {
                 setMeasureBarangay(barangay);
                 setActiveTab('gis_measure');
                 setViewMode('portal');

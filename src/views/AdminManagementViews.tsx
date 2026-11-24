@@ -37,8 +37,10 @@ import {
   Crosshair,
   Undo2,
   X,
-  Lock
+  Lock,
+  Compass
 } from 'lucide-react';
+import { BarangayDetailModal } from '../components/BarangayDetailModal';
 import {
   DEFAULT_FORM_SECTIONS,
   DEFAULT_FORM_FIELDS,
@@ -614,6 +616,40 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
     }
   };
 
+  const [editingBarangayModal, setEditingBarangayModal] = useState<Barangay | null>(null);
+
+  const handleUpdateBarangay = (name: string, updates: Partial<Barangay>) => {
+    try {
+      const allSettings = getSavedSettings();
+      allSettings[name] = {
+        ...allSettings[name],
+        focalPerson: updates.focalPerson,
+        contactNumber: updates.contactNumber,
+        zone: updates.terrain,
+        puroks: updates.puroks,
+        areaHa: updates.totalAreaHa,
+        irrigatedAreaHa: updates.irrigatedAreaHa,
+        rainfedAreaHa: updates.rainfedAreaHa,
+        centerLat: updates.lat,
+        centerLng: updates.lng
+      };
+      localStorage.setItem('silago_gis_measure_settings', JSON.stringify(allSettings));
+      setSavedSettingsState(allSettings);
+
+      if (activeBarangay.name === name) {
+        setActiveBarangay((prev) => ({ ...prev, ...updates }));
+        if (updates.lat && updates.lng) {
+          setCenterCoords([updates.lat, updates.lng]);
+        }
+      }
+
+      setNotice(`Barangay ${name} details updated successfully.`);
+      setTimeout(() => setNotice(''), 4000);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div ref={surveyorTopRef} className="mx-auto w-full max-w-6xl space-y-4 px-1 py-1 sm:px-2">
       {/* 1. TOP SECTION: INTERACTIVE LIVE GIS BOUNDARY SURVEYOR MAP (Matching Reference Image 2) */}
@@ -779,10 +815,19 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
                     <div className="inline-flex items-center gap-1">
                       <button
                         type="button"
+                        onClick={() => setEditingBarangayModal(b)}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-800 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-2.5 py-1 transition cursor-pointer"
+                        title="Edit barangay details"
+                      >
+                        <Pencil className="w-3 h-3 text-blue-700" />
+                        <span>Edit</span>
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleSelectBarangay(b)}
                         className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg px-2.5 py-1 transition cursor-pointer"
                       >
-                        <Pencil className="w-3 h-3 text-emerald-700" />
+                        <Compass className="w-3 h-3 text-emerald-700" />
                         <span>Measure GIS</span>
                       </button>
                       <button
@@ -808,6 +853,21 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
           </table>
         </div>
       </section>
+
+      {editingBarangayModal && (
+        <BarangayDetailModal
+          barangay={editingBarangayModal}
+          parcels={parcels}
+          onClose={() => setEditingBarangayModal(null)}
+          onSelectParcel={(_p) => {}}
+          onViewOnMap={(b) => {
+            setEditingBarangayModal(null);
+            handleSelectBarangay(b);
+          }}
+          onUpdateBarangay={handleUpdateBarangay}
+          canEdit={true}
+        />
+      )}
     </div>
   );
 }
