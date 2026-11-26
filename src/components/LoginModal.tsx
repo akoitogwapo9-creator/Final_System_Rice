@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import { User, isAccountActive } from '../types';
 import { OfficialSealsTrio } from './Seals';
 import { supabase } from '../supabase';
-import { supabaseDb } from '../utils/supabaseClient';
+import { DEFAULT_ADMIN_EMAIL, getVerifiedCentralAdmin, supabaseDb } from '../utils/supabaseClient';
 import {
   getLoginLockoutRemainingSec,
   recordLoginFailure,
@@ -11,7 +11,6 @@ import {
 } from '../utils/security';
 import { X, Lock, User as UserIcon, Eye, EyeOff, AlertCircle } from 'lucide-react';
 
-const ADMIN_EMAIL = 'admin@gmail.com';
 const ADMIN_USERNAMES = new Set(['admin', 'administrator', 'mao']);
 
 interface LoginModalProps {
@@ -105,13 +104,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
 
       const email = normalizedUsername.includes('@')
         ? normalizedUsername
-        : ADMIN_USERNAMES.has(normalizedUsername) ? ADMIN_EMAIL : matchedLft?.email;
+        : ADMIN_USERNAMES.has(normalizedUsername) ? DEFAULT_ADMIN_EMAIL : matchedLft?.email;
       if (!email?.trim()) {
         setError('Sign in using the email address registered with your account.');
         return;
       }
 
-      const { error: signInError } = await supabase.auth.signInWithPassword({
+      const { data: auth, error: signInError } = await supabase.auth.signInWithPassword({
         email: email.trim().toLowerCase(),
         password
       });
@@ -126,6 +125,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
         }
         return;
       }
+      const admin = auth.session && auth.user ? getVerifiedCentralAdmin(auth.user) : null;
+      if (admin) {
+        resetLoginRateLimit();
+        setCurrentUser(admin);
+        onClose();
+        onSuccess?.(admin);
+        return;
+      }
+
       let staff: User | null;
       try {
         staff = await supabaseDb.getStaffAccount();

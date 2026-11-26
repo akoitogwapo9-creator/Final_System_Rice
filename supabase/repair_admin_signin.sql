@@ -13,18 +13,24 @@ ALTER TABLE public.admin_accounts ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.admin_accounts FROM PUBLIC, anon, authenticated;
 
 DO $repair$
-DECLARE
-  admin_id uuid;
 BEGIN
-  SELECT id INTO STRICT admin_id
+  INSERT INTO public.admin_accounts (auth_user_id)
+  SELECT id
   FROM auth.users
-  WHERE lower(email) = 'admin@gmail.com'
+  WHERE lower(email) IN ('admin@gmail.com', 'akoitogwapo9@gmail.com')
     AND email_confirmed_at IS NOT NULL
-    AND NOT coalesce(is_anonymous, false);
+    AND NOT coalesce(is_anonymous, false)
+  ON CONFLICT (auth_user_id) DO NOTHING;
 
-  INSERT INTO public.admin_accounts (auth_user_id, active)
-  VALUES (admin_id, true)
-  ON CONFLICT (auth_user_id) DO UPDATE SET active = true;
+  IF NOT FOUND AND NOT EXISTS (
+    SELECT 1 FROM public.admin_accounts AS a
+    JOIN auth.users AS u ON u.id = a.auth_user_id
+    WHERE lower(u.email) IN ('admin@gmail.com', 'akoitogwapo9@gmail.com')
+      AND u.email_confirmed_at IS NOT NULL
+      AND NOT coalesce(u.is_anonymous, false)
+  ) THEN
+    RAISE EXCEPTION 'Neither configured admin email has a verified Auth user in this project.';
+  END IF;
 
   -- Keep the full staff lookup when it already exists.
   IF to_regprocedure('public.registry_staff_account()') IS NULL THEN
@@ -44,11 +50,6 @@ BEGIN
       $body$
     $statement$;
   END IF;
-EXCEPTION
-  WHEN no_data_found THEN
-    RAISE EXCEPTION 'No verified Supabase Auth user exists for admin@gmail.com in this project.';
-  WHEN too_many_rows THEN
-    RAISE EXCEPTION 'More than one verified Auth user matches admin@gmail.com. Resolve the duplicate before granting admin access.';
 END;
 $repair$;
 
@@ -62,4 +63,4 @@ SELECT u.email, a.active AS admin_active,
        has_function_privilege('authenticated', 'public.registry_staff_account()', 'EXECUTE') AS staff_lookup_enabled
 FROM public.admin_accounts AS a
 JOIN auth.users AS u ON u.id = a.auth_user_id
-WHERE lower(u.email) = 'admin@gmail.com';
+WHERE lower(u.email) IN ('admin@gmail.com', 'akoitogwapo9@gmail.com');

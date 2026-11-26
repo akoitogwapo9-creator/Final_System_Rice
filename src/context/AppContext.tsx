@@ -12,6 +12,7 @@ import {
   normalizeLftAccount,
   sortParcelsAlphabetically,
   supabaseDb,
+  getVerifiedCentralAdmin,
   broadcastRealtimeChange,
   getOfflinePendingFarms,
   syncOfflinePendingFarms,
@@ -525,14 +526,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     const resolveAuthorizedSessionUser = async (accessToken: string): Promise<User | null> => {
       const { data: { user }, error } = await supabase.auth.getUser(accessToken);
       if (error || !user || user.is_anonymous) return null;
-      const staff = await supabaseDb.getStaffAccount();
+      const verifiedAdmin = getVerifiedCentralAdmin(user);
+      const staff = verifiedAdmin || await supabaseDb.getStaffAccount();
       if (!staff) {
         await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
         return null;
       }
 
       if (staff.role === 'Central Admin') {
-        const profile = await supabaseDb.getSetting<Partial<User>>('silago_admin_profile');
+        const profile = await withTimeout(
+          supabaseDb.getSetting<Partial<User>>('silago_admin_profile'), 2000
+        ).catch(() => null);
         return {
           ...staff,
           name: profile?.name || staff.name,

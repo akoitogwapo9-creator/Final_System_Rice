@@ -1,4 +1,4 @@
-import { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
+import { SupabaseClient, RealtimeChannel, type User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { supabase as sharedSupabaseClient, memoryAuthStorage } from '../supabase';
 import { FarmParcel, LftAccount, User } from '../types';
 import { isLegacyProductionEstimate, normalizeSeasonalRecord, ACTIVE_SEASON } from '../data/seasonalProduction';
@@ -7,6 +7,27 @@ export { memoryAuthStorage };
 
 // Shared official Supabase JS client instance (session-scoped auth storage)
 export const supabaseClient: SupabaseClient = sharedSupabaseClient;
+
+export const DEFAULT_ADMIN_EMAIL = 'admin@gmail.com';
+const CENTRAL_ADMIN_EMAILS = new Set([DEFAULT_ADMIN_EMAIL, 'akoitogwapo9@gmail.com']);
+
+// Use only an identity returned by Supabase Auth, never the submitted username or user metadata.
+export function getVerifiedCentralAdmin(authUser: SupabaseAuthUser): User | null {
+  const email = authUser.email?.trim().toLowerCase();
+  if (!email || authUser.is_anonymous || !authUser.email_confirmed_at || !CENTRAL_ADMIN_EMAILS.has(email)) {
+    return null;
+  }
+
+  return {
+    id: authUser.id,
+    email,
+    username: 'admin',
+    name: 'Municipal Administrator',
+    title: 'Municipal Agriculture Administrator',
+    role: 'Central Admin',
+    office: 'Silago Municipal Agriculture Office (DA-MAO)'
+  };
+}
 
 // PostgREST and Storage independently enforce access through database grants and RLS.
 export async function hasSupabaseWriteSession(): Promise<boolean> {
