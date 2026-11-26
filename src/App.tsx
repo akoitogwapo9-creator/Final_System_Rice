@@ -55,7 +55,7 @@ import {
   Shield
 } from 'lucide-react';
 
-const PUBLIC_PORTAL_TABS: PortalTab[] = ['eartags', 'reports', 'evaluation', 'legal_decrees'];
+const PUBLIC_PORTAL_TABS: PortalTab[] = ['eartags', 'reports', 'evaluation', 'legal_decrees', 'map'];
 
 const AppContent: React.FC = () => {
   const {
@@ -104,17 +104,12 @@ const AppContent: React.FC = () => {
   }, [activeTab, isCentralAdmin, setActiveTab, setSettingsActiveSubTab]);
 
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
-  const openMapAfterLogin = useRef(false);
   useEffect(() => {
     if (currentUser) {
       setViewMode('portal');
       setIsLoginModalOpen(false);
-      if (openMapAfterLogin.current) {
-        openMapAfterLogin.current = false;
-        setActiveTab('map');
-      }
     }
-  }, [currentUser, setActiveTab]);
+  }, [currentUser]);
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -184,7 +179,6 @@ const AppContent: React.FC = () => {
 
         if (routeTab) {
           if (!currentUser && !PUBLIC_PORTAL_TABS.includes(routeTab)) {
-            openMapAfterLogin.current = routeTab === 'map';
             setIsLoginModalOpen(true);
             setViewMode('landing');
             window.history.replaceState({}, document.title, '/');
@@ -201,7 +195,6 @@ const AppContent: React.FC = () => {
           setViewMode('portal');
         } else if (tabParam && ['dashboard', 'lft_dashboard', 'brgy_dashboard', 'map', 'gis_measure', 'eartags', 'subsidies', 'reports', 'accounts', 'photos', 'settings', 'legal_decrees', 'barangays', 'account', 'registry_form'].includes(tabParam)) {
           if (!currentUser && !PUBLIC_PORTAL_TABS.includes(tabParam as PortalTab)) {
-            openMapAfterLogin.current = tabParam === 'map';
             setIsLoginModalOpen(true);
             setViewMode('landing');
             url.searchParams.delete('tab');
@@ -301,7 +294,6 @@ const AppContent: React.FC = () => {
   ) => {
     const adminOnlyTabs: PortalTab[] = ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure'];
     if (!currentUser && !PUBLIC_PORTAL_TABS.includes(tab)) {
-      openMapAfterLogin.current = tab === 'map';
       setIsLoginModalOpen(true);
       return;
     }
@@ -322,7 +314,17 @@ const AppContent: React.FC = () => {
     setViewMode('portal');
   };
 
+  useEffect(() => {
+    if (currentUser) return;
+    setIsAddParcelOpen(false);
+    setEditingParcel(null);
+    setInitialCoordsForAdd(null);
+    setIsCropPlantingOpen(false);
+    setCropTargetParcel(null);
+  }, [currentUser]);
+
   const handleSaveParcel = async (parcel: FarmParcel) => {
+    if (!currentUser) throw new Error('Sign in before saving a parcel.');
     if (editingParcel) {
       await updateParcel(parcel.tagNumber, parcel);
       setEditingParcel(null);
@@ -529,7 +531,7 @@ const AppContent: React.FC = () => {
                       {currentUser?.name || (isCentralAdmin ? adminProfile.name : 'Public Visitor')}
                     </span>
                     <span className="text-[10px] text-white/65 block truncate leading-tight mt-0.5">
-                      {currentUser?.title || (isCentralAdmin ? adminProfile.title : 'Read-Only Mode')}
+                      {currentUser?.title || (isCentralAdmin ? adminProfile.title : 'View-Only Mode (Sign in to edit)')}
                     </span>
                   </div>
                   {!currentUser && (
@@ -538,13 +540,13 @@ const AppContent: React.FC = () => {
                       onClick={() => setIsLoginModalOpen(true)}
                       className="px-2 py-1 bg-gov-green hover:bg-emerald-800 text-white rounded text-[10px] font-semibold transition cursor-pointer shrink-0"
                     >
-                      Login
+                      Sign In
                     </button>
                   )}
                 </div>
 
                 {/* Action Button 1: + Register Farmer & Farm */}
-                <button
+                {permissions.canAddParcels && <button
                   type="button"
                   onClick={() => {
                     if (permissions.isPublicVisitor) {
@@ -559,7 +561,7 @@ const AppContent: React.FC = () => {
                 >
                   <PlusCircle className="w-3.5 h-3.5 text-emerald-200" />
                   <span>{permissions.isPublicVisitor ? '+ Register (Login Required)' : '+ Register Farmer & Farm'}</span>
-                </button>
+                </button>}
 
                 {/* Action Button 2: Separate Crop & Planting Form */}
                 {!permissions.isPublicVisitor && (
@@ -620,7 +622,7 @@ const AppContent: React.FC = () => {
                 </div>
 
                 {/* Mini + Button */}
-                <button
+                {permissions.canAddParcels && <button
                   type="button"
                   onClick={() => {
                     if (permissions.isPublicVisitor) {
@@ -634,7 +636,7 @@ const AppContent: React.FC = () => {
                   title={permissions.isPublicVisitor ? 'Sign in required to register parcels' : 'Register Farmer & Farm'}
                 >
                   <PlusCircle className="w-4 h-4 text-white" />
-                </button>
+                </button>}
 
                 {!permissions.isPublicVisitor && (
                   <button
@@ -846,7 +848,7 @@ const AppContent: React.FC = () => {
                       {currentUser?.name || 'Public Visitor'}
                     </span>
                     <span className="text-[10px] text-gov-muted leading-tight">
-                      {currentUser?.title || 'Click to Sign In'}
+                      {currentUser?.title || 'View-Only Mode · Sign In to Edit'}
                     </span>
                   </div>
                 </div>
@@ -910,14 +912,14 @@ const AppContent: React.FC = () => {
                 </div>
               )}
 
-              {activeTab === 'map' && currentUser && (
+              {activeTab === 'map' && (
                 <MapView
                   onSelectParcel={(p) => setSelectedParcel(p)}
-                  onOpenAddParcelWithCoords={(coords) => {
+                  onOpenAddParcelWithCoords={permissions.canAddParcels ? (coords) => {
                     setEditingParcel(null);
                     setInitialCoordsForAdd(coords);
                     setIsAddParcelOpen(true);
-                  }}
+                  } : undefined}
                   focusBarangay={focusBarangayForMap}
                   focusParcel={focusParcelForMap}
                   onOpenLogin={() => setIsLoginModalOpen(true)}
@@ -933,14 +935,26 @@ const AppContent: React.FC = () => {
                   onCertificateRouteHandled={() => setOpenCertificateOnLoad(false)}
                   onSelectParcel={(p) => setSelectedParcel(p)}
                   onEditParcel={(p) => {
+                    if (!currentUser) {
+                      setIsLoginModalOpen(true);
+                      return;
+                    }
                     setEditingParcel(p);
                     setIsAddParcelOpen(true);
                   }}
                   onOpenAddParcel={() => {
+                    if (!currentUser) {
+                      setIsLoginModalOpen(true);
+                      return;
+                    }
                     setEditingParcel(null);
                     setIsAddParcelOpen(true);
                   }}
                   onOpenCropPlanting={(p) => {
+                    if (!currentUser) {
+                      setIsLoginModalOpen(true);
+                      return;
+                    }
                     setCropTargetParcel(p || null);
                     setIsCropPlantingOpen(true);
                   }}
@@ -949,10 +963,10 @@ const AppContent: React.FC = () => {
                     if (b) setReportBarangayFilter(b);
                     setActiveTab('reports');
                   }}
-                  onLocateOnMap={currentUser ? (p) => {
+                  onLocateOnMap={(p) => {
                     setFocusParcelForMap(p);
                     handleNavigateToPortalTab('map');
-                  } : undefined}
+                  }}
                 />
               )}
 
@@ -1030,6 +1044,7 @@ const AppContent: React.FC = () => {
 
       <BarangayDetailModal
         barangay={selectedBarangay}
+        canEdit={isCentralAdmin}
         parcels={parcels}
         onClose={() => setSelectedBarangay(null)}
         onSelectParcel={(p) => setSelectedParcel(p)}
@@ -1040,7 +1055,7 @@ const AppContent: React.FC = () => {
       />
 
       <AddParcelModal
-        isOpen={isAddParcelOpen}
+        isOpen={Boolean(currentUser) && isAddParcelOpen}
         onClose={() => {
           setIsAddParcelOpen(false);
           setEditingParcel(null);
@@ -1058,7 +1073,7 @@ const AppContent: React.FC = () => {
       />
 
       <CropPlantingModal
-        isOpen={isCropPlantingOpen}
+        isOpen={Boolean(currentUser) && isCropPlantingOpen}
         initialParcel={cropTargetParcel}
         onClose={() => {
           setIsCropPlantingOpen(false);
@@ -1067,12 +1082,12 @@ const AppContent: React.FC = () => {
       />
 
       <AdminProfileModal
-        isOpen={isAdminProfileOpen}
+        isOpen={isCentralAdmin && isAdminProfileOpen}
         onClose={() => setIsAdminProfileOpen(false)}
       />
 
       <LftAccountSettingsModal
-        isOpen={isLftAccountModalOpen}
+        isOpen={permissions.isLftOfficer && isLftAccountModalOpen}
         onClose={() => setIsLftAccountModalOpen(false)}
       />
 
@@ -1111,6 +1126,7 @@ const AppContent: React.FC = () => {
           handleNavigateToPortalTab(tab);
         }}
         onOpenAddParcelModal={() => {
+          if (!permissions.canAddParcels) return;
           setEditingParcel(null);
           setInitialCoordsForAdd(null);
           setIsAddParcelOpen(true);

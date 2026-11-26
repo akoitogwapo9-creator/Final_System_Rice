@@ -5,7 +5,7 @@ if (typeof window !== 'undefined') {
 }
 import 'leaflet.heat';
 import { useApp } from '../context/AppContext';
-import { BARANGAYS, matchBarangay } from '../data/barangays';
+import { BARANGAYS, getBarangayLabel, getBarangayZone, matchBarangay } from '../data/barangays';
 import { SILAGO_OFFICIAL_GEOJSON, SilagoGeoJSONFeature, findSilagoBarangayFeature, normalizeBarangayName } from '../data/silagoGeoJson';
 import { SILAGO_BARANGAY_BOUNDARIES, BarangayBoundary } from '../data/barangayBoundaries';
 import { calculateCropGrowthStage } from '../data/riceVarieties';
@@ -358,8 +358,8 @@ export const MapView: React.FC<MapViewProps> = ({
   focusParcel,
   onOpenLogin
 }) => {
-  const { parcels, currentUser, lftAccounts, t } = useApp();
-  const isAuthorized = Boolean(currentUser);
+  const { parcels, currentUser, lftAccounts, barangayProfiles, t } = useApp();
+  const isAuthorized = Boolean(currentUser && onOpenAddParcelWithCoords);
   const isBarangayScoped = Boolean(currentUser && currentUser.role !== 'Central Admin');
   const assignedBarangays = useMemo(() => {
     if (!isBarangayScoped || !currentUser) return BARANGAYS.map((barangay) => barangay.name);
@@ -444,6 +444,12 @@ export const MapView: React.FC<MapViewProps> = ({
   const [selectedParcelForDrawer, setSelectedParcelForDrawer] = useState<FarmParcel | null>(null);
   const [isCopiedCoords, setIsCopiedCoords] = useState(false);
   const [mapNotice, setMapNotice] = useState('');
+
+  useEffect(() => {
+    if (isAuthorized) return;
+    setActiveTool((tool) => tool === 'measure' ? tool : 'none');
+    setDigitizerPoints([]);
+  }, [isAuthorized]);
 
   const handleToggleDrawBoundary = () => {
     if (!isAuthorized) {
@@ -723,6 +729,7 @@ export const MapView: React.FC<MapViewProps> = ({
   }, [canAccessBarangay]);
 
   const handleFinishDrawnPolygon = useCallback(() => {
+    if (!isAuthorized) return;
     if (digitizerPoints.length < 3) return;
     const centroid = calculatePolygonCentroid(digitizerPoints);
     const areaMetrics = calculatePolygonAreaHectares(digitizerPoints);
@@ -748,7 +755,7 @@ export const MapView: React.FC<MapViewProps> = ({
     }
     setDigitizerPoints([]);
     setActiveTool('none');
-  }, [digitizerPoints, onOpenAddParcelWithCoords, canAccessBarangay]);
+  }, [digitizerPoints, onOpenAddParcelWithCoords, canAccessBarangay, isAuthorized]);
 
   // Set cursor and map interaction when drawing
   useEffect(() => {
@@ -774,9 +781,9 @@ export const MapView: React.FC<MapViewProps> = ({
 
       if (activeTool === 'measure') {
         setMeasurePoints((prev) => [...prev, [lat, lng]]);
-      } else if (activeTool === 'draw_boundary' || activeTool === 'draw_polygon') {
+      } else if (isAuthorized && (activeTool === 'draw_boundary' || activeTool === 'draw_polygon')) {
         setDigitizerPoints((prev) => [...prev, [lat, lng]]);
-      } else if (activeTool === 'drop_pin') {
+      } else if (isAuthorized && activeTool === 'drop_pin') {
         const detectedBrgy = detectBarangayFromCoordinates(lat, lng);
         if (!detectedBrgy || !canAccessBarangay(detectedBrgy)) {
           setMapNotice(detectedBrgy ? `This point is in Brgy. ${detectedBrgy}, outside your assigned barangays.` : 'Select a farm location inside one of Silago’s official barangay boundaries.');
@@ -795,7 +802,7 @@ export const MapView: React.FC<MapViewProps> = ({
     };
 
     const handleDblClick = (e: L.LeafletMouseEvent) => {
-      if ((activeTool === 'draw_boundary' || activeTool === 'draw_polygon') && digitizerPoints.length >= 3) {
+      if (isAuthorized && (activeTool === 'draw_boundary' || activeTool === 'draw_polygon') && digitizerPoints.length >= 3) {
         L.DomEvent.stopPropagation(e);
         handleFinishDrawnPolygon();
       }
@@ -807,7 +814,7 @@ export const MapView: React.FC<MapViewProps> = ({
       map.off('click', handleClick);
       map.off('dblclick', handleDblClick);
     };
-  }, [activeTool, digitizerPoints, onOpenAddParcelWithCoords, handleFinishDrawnPolygon, canAccessBarangay]);
+  }, [activeTool, digitizerPoints, onOpenAddParcelWithCoords, handleFinishDrawnPolygon, canAccessBarangay, isAuthorized]);
 
   // Handle Tile Provider change
   useEffect(() => {
@@ -869,7 +876,7 @@ export const MapView: React.FC<MapViewProps> = ({
       // Extract details for popup
       const farmerDisplayName =
         focusParcel.farmerGivenName && focusParcel.farmerFamilyName
-          ? `${focusParcel.farmerGivenName} ${focusParcel.farmerFamilyName}`
+          ? `${[focusParcel.farmerGivenName, focusParcel.farmerMiddleName, focusParcel.farmerFamilyName, focusParcel.farmerSuffix].filter(Boolean).join(' ')}`
           : focusParcel.raiserName;
       const parcelArea = getParcelAreaHa(focusParcel);
       const areaHa = parcelArea > 0 ? `${parcelArea.toFixed(2)} ha` : 'Not recorded';
@@ -1055,13 +1062,14 @@ export const MapView: React.FC<MapViewProps> = ({
       },
       onEachFeature: (feature, layer) => {
         const brgyName = feature.properties?.name || 'Barangay';
+        const label = escapeHtml(getBarangayLabel(brgyName, barangayProfiles));
         if (showBarangayLabels && feature.properties?.center) {
           L.marker(feature.properties.center, {
             interactive: false,
             keyboard: false,
             icon: L.divIcon({
               className: '',
-              html: `<span style="display:inline-flex;align-items:center;gap:4.5px;padding:2.5px 8px;border:1px solid #cbd5e1;border-radius:999px;background:rgba(255,255,255,0.96);color:#0f172a;font:700 11px/1.2 system-ui,-apple-system,sans-serif;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.12)"><span style="width:6px;height:6px;border-radius:999px;background:#16a34a;flex-shrink:0"></span>${escapeHtml(brgyName)}</span>`,
+              html: `<span style="display:inline-flex;align-items:center;gap:4.5px;padding:2.5px 8px;border:1px solid #cbd5e1;border-radius:999px;background:rgba(255,255,255,0.96);color:#0f172a;font:700 11px/1.2 system-ui,-apple-system,sans-serif;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.12)"><span style="width:6px;height:6px;border-radius:999px;background:#16a34a;flex-shrink:0"></span>${label}</span>`,
               iconSize: undefined
             })
           }).addTo(labelsGroup);
@@ -1074,7 +1082,7 @@ export const MapView: React.FC<MapViewProps> = ({
         // Minimal, clean floating tooltip with barangay name only
         layer.bindTooltip(
           `<div class="silago-brgy-tooltip-content font-bold text-slate-900 text-xs px-1 py-0.5 tracking-tight">
-            Brgy. ${brgyName}
+            Brgy. ${label}
           </div>`,
           {
             sticky: true,
@@ -1110,7 +1118,7 @@ export const MapView: React.FC<MapViewProps> = ({
             setSelectedBarangay(brgyName);
             setCustomizerBarangay({
               name: brgyName,
-              zone: feature.properties?.zone,
+              zone: getBarangayZone(brgyName, barangayProfiles),
               terrain: feature.properties?.terrain,
               center: feature.properties?.center,
               areaHa: feature.properties?.areaHa
@@ -1127,7 +1135,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
     geoJsonLayer.addTo(group);
     geoJsonLayerRef.current = geoJsonLayer;
-  }, [showBoundariesLayer, showBarangayLabels, selectedBarangay, getBarangayStyle, customBarangayStyles, canAccessBarangay]);
+  }, [showBoundariesLayer, showBarangayLabels, selectedBarangay, getBarangayStyle, customBarangayStyles, canAccessBarangay, barangayProfiles]);
 
   // Generate weighted GIS Heatmap data points
   const heatPointsData = useMemo(() => {
@@ -1826,7 +1834,7 @@ export const MapView: React.FC<MapViewProps> = ({
         {/* 1. TOP SECTION: ACTION BAR (Matching Picture 2 "+ Register Swine with GPS") */}
         {!isFullscreen && (
           <div className="flex items-center justify-between gap-3 px-1 py-1">
-            <button
+            {isAuthorized && <button
               type="button"
               onClick={() => {
                 if (onOpenAddParcelWithCoords) {
@@ -1839,7 +1847,7 @@ export const MapView: React.FC<MapViewProps> = ({
             >
               <Plus className="w-4 h-4" />
               <span>Register Farm with GPS</span>
-            </button>
+            </button>}
 
             {/* Quick Registry Metrics Chips */}
             <div className="hidden sm:flex items-center gap-2 text-xs text-slate-600 font-medium">
@@ -2062,7 +2070,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 {isBarangayScoped ? (
                   <span className="truncate max-w-[200px] xl:max-w-[260px]">
-                    Assigned: {visibleBarangays.map((b) => b.name).join(', ') || 'No barangays'}
+                    Assigned: {visibleBarangays.map((b) => getBarangayLabel(b.name, barangayProfiles)).join(', ') || 'No barangays'}
                   </span>
                 ) : currentUser ? (
                   <>
@@ -2102,7 +2110,7 @@ export const MapView: React.FC<MapViewProps> = ({
             {/* Right: Select Location, Heatmap, Filters, Basemap Switcher */}
             <div className="flex items-center gap-1.5 pointer-events-auto flex-wrap lg:flex-nowrap shrink-0">
               {/* Select Location for Registration */}
-              <button
+              {isAuthorized && <button
                 type="button"
                 onClick={() => {
                   setActiveTool(activeTool === 'drop_pin' ? 'none' : 'drop_pin');
@@ -2123,7 +2131,7 @@ export const MapView: React.FC<MapViewProps> = ({
                 <span className="2xl:hidden">
                   {activeTool === 'drop_pin' ? 'Click Map' : 'Select Location'}
                 </span>
-              </button>
+              </button>}
 
               {/* Heatmap Toggle */}
               <button
@@ -2201,7 +2209,7 @@ export const MapView: React.FC<MapViewProps> = ({
                           <option value="ALL">All 15 Barangays</option>
                           {visibleBarangays.map((b) => (
                             <option key={b.name} value={b.name}>
-                              {b.name}
+                              {getBarangayLabel(b.name, barangayProfiles)}
                             </option>
                           ))}
                         </select>
@@ -2358,7 +2366,7 @@ export const MapView: React.FC<MapViewProps> = ({
             </button>
 
             {/* Draw Boundary */}
-            <button
+            {isAuthorized && <button
               type="button"
               onClick={handleToggleDrawBoundary}
               className={`w-9 h-9 rounded-xl flex items-center justify-center shadow-lg transition-all cursor-pointer backdrop-blur-md active:scale-95 ${
@@ -2370,7 +2378,7 @@ export const MapView: React.FC<MapViewProps> = ({
               aria-label="Draw Boundary"
             >
               <PenTool className="w-4 h-4" />
-            </button>
+            </button>}
 
             {/* Colors */}
             <button
@@ -2521,7 +2529,7 @@ export const MapView: React.FC<MapViewProps> = ({
             )}
 
             {/* Quick Notice Banner when dropping a pin */}
-            {activeTool === 'drop_pin' && (
+            {isAuthorized && activeTool === 'drop_pin' && (
               <div className="absolute top-16 left-1/2 -translate-x-1/2 z-400 bg-rose-600 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-2xl border border-rose-400/50 flex items-center gap-2 animate-bounce pointer-events-auto">
                 <MapPin className="w-4 h-4 text-white shrink-0" />
                 <span>Click anywhere on the map to pin and select farm location</span>
@@ -2547,7 +2555,7 @@ export const MapView: React.FC<MapViewProps> = ({
             )}
 
             {/* DRAW BOUNDARY OVERLAY HUD */}
-            {(activeTool === 'draw_boundary' || activeTool === 'draw_polygon') && (
+            {isAuthorized && (activeTool === 'draw_boundary' || activeTool === 'draw_polygon') && (
               <div className="absolute top-16 left-1/2 -translate-x-1/2 z-400 max-w-xl w-[92%] sm:w-auto bg-slate-900/95 backdrop-blur-md border border-blue-500/60 rounded-2xl p-3 shadow-2xl text-white flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in duration-200">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm animate-pulse">
@@ -2751,7 +2759,7 @@ export const MapView: React.FC<MapViewProps> = ({
                       </span>
                     </div>
                     <h4 className="font-extrabold text-sm text-slate-900 mt-1">
-                      Brgy. {customizerBarangay.name}
+                      Brgy. {getBarangayLabel(customizerBarangay.name, barangayProfiles)}
                     </h4>
                     <p className="text-[10.5px] text-slate-500">
                       Silago, Southern Leyte &bull; {customizerBarangay.zone || 'Official Boundary'}

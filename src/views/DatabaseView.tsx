@@ -5,6 +5,7 @@ import {
   ASSIGNED_10_BARANGAYS,
   matchBarangay,
   getDisplayBarangay,
+  getBarangayLabel,
   getUserAssignedBarangays,
   isUserAuthorizedForBarangay,
   getAssignedLftForBarangay
@@ -92,6 +93,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     deleteBulkParcels,
     updateParcel,
     currentUser,
+    barangayProfiles,
     activeSeason,
     permissions,
     realtimeStatus,
@@ -163,6 +165,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     farmerFamilyName: string;
     farmerGivenName: string;
     farmerMiddleName: string;
+    farmerSuffix: string;
     photoUrl: string;
     fieldPhotoUrl: string;
     barangay: string;
@@ -309,10 +312,10 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       const giv = parcel.farmerGivenName.trim();
       const mid = parcel.farmerMiddleName ? ` ${parcel.farmerMiddleName.trim()}` : '';
       const suf = parcel.farmerSuffix?.trim() ? ` ${parcel.farmerSuffix.trim()}` : '';
-      return `${fam}, ${giv}${mid}${suf}`.trim();
+      return `${fam}, ${giv}${mid}${suf}`.trim().toUpperCase();
     }
     if (parcel.raiserName && parcel.raiserName.trim()) {
-      return parcel.raiserName.trim();
+      return parcel.raiserName.trim().toUpperCase();
     }
     return 'UNNAMED FARMER';
   };
@@ -537,9 +540,10 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     setEditingTag(parcel.tagNumber);
     setInlineEditData({
       swineNameOrId: parcel.swineNameOrId || '',
-      farmerFamilyName: parcel.farmerFamilyName || nameParts.family || '',
-      farmerGivenName: parcel.farmerGivenName || nameParts.given || '',
-      farmerMiddleName: parcel.farmerMiddleName || nameParts.middle || '',
+      farmerFamilyName: (parcel.farmerFamilyName || nameParts.family || '').toUpperCase(),
+      farmerGivenName: (parcel.farmerGivenName || nameParts.given || '').toUpperCase(),
+      farmerMiddleName: (parcel.farmerMiddleName || nameParts.middle || '').toUpperCase(),
+      farmerSuffix: (parcel.farmerSuffix || '').toUpperCase(),
       photoUrl: parcel.photoUrl || parcel.farmerPhotoUrl || farmerPhoto,
       fieldPhotoUrl: parcel.fieldPhotoUrl || parcel.landPhotoUrl || landPhoto,
       barangay: parcel.barangay || 'Balagawan',
@@ -585,11 +589,11 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   };
 
   const handleSaveInlineEdit = (tagNumber: string) => {
-    if (!inlineEditData) return;
+    if (!currentUser || !inlineEditData) return;
     const fam = inlineEditData.farmerFamilyName.trim().toUpperCase();
-    const giv = inlineEditData.farmerGivenName.trim();
-    const mid = inlineEditData.farmerMiddleName.trim();
-    const suffix = parcels.find((parcel) => parcel.tagNumber === tagNumber)?.farmerSuffix;
+    const giv = inlineEditData.farmerGivenName.trim().toUpperCase();
+    const mid = inlineEditData.farmerMiddleName.trim().toUpperCase();
+    const suffix = inlineEditData.farmerSuffix.trim().toUpperCase();
     const givenNames = [giv, mid, suffix].filter(Boolean).join(' ');
     const fullRaiserName = fam && givenNames ? `${fam}, ${givenNames}` : (fam || givenNames || 'UNKNOWN');
 
@@ -598,6 +602,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       farmerFamilyName: fam,
       farmerGivenName: giv,
       farmerMiddleName: mid,
+      farmerSuffix: suffix,
       raiserName: fullRaiserName,
       barangay: inlineEditData.barangay,
       purok: inlineEditData.purok,
@@ -680,11 +685,13 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
   // Export to Excel (CSV format with UTF-8 BOM that opens directly in MS Excel)
   const exportToExcel = () => {
+    if (!permissions.canExportDatabase) return;
     const headers = [
       'RSBSA NO.',
       'FAMILY NAME',
       'GIVEN NAME',
       'MIDDLE NAME',
+      'SUFFIX',
       'BARANGAY',
       'PUROK',
       'RESIDENTIAL ADDRESS',
@@ -716,6 +723,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         `"${nameParts.family}"`,
         `"${nameParts.given}"`,
         `"${nameParts.middle}"`,
+        `"${p.farmerSuffix?.toUpperCase() || ''}"`,
         `"${p.barangay}"`,
         `"${p.purok || 'Purok 1'}"`,
         `"Silago, Southern Leyte"`,
@@ -748,6 +756,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
   // Export to MS Word (.doc with HTML table styling) matching Swine Registry
   const exportToWord = () => {
+    if (!permissions.canExportDatabase) return;
     const tableRowsHtml = filteredParcels
       .map(
         (p, i) => `
@@ -949,7 +958,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
           </button>
 
           {/* More actions dropdown (Print PDF Summary, Excel CSV, Word DOC, Reports) */}
-          <div className="relative inline-block text-left" ref={moreActionsRef}>
+          {permissions.canExportDatabase && <div className="relative inline-block text-left" ref={moreActionsRef}>
             <button
               type="button"
               onClick={() => setShowMoreActionsMenu((prev) => !prev)}
@@ -1015,7 +1024,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                 </button>
               </div>
             )}
-          </div>
+          </div>}
 
           {/* + Register Rice Farm & Crop Planting Form Buttons */}
           {!permissions.isPublicVisitor && (
@@ -1140,7 +1149,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               <optgroup label="Silago Barangays">
                 {BARANGAYS.map((b) => (
                   <option key={b.name} value={b.name}>
-                    {b.name}
+                    {getBarangayLabel(b.name, barangayProfiles)}
                   </option>
                 ))}
               </optgroup>
@@ -1496,7 +1505,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                               type="text"
                               value={inlineEditData.farmerFamilyName}
                               onChange={(e) =>
-                                setInlineEditData({ ...inlineEditData, farmerFamilyName: e.target.value })
+                                setInlineEditData({ ...inlineEditData, farmerFamilyName: e.target.value.toUpperCase() })
                               }
                               className="w-full px-1.5 py-0.5 bg-white border border-stone-300 rounded text-xs font-bold uppercase text-stone-900 focus:ring-2 focus:ring-emerald-600 shadow-2xs"
                               placeholder="Family Name"
@@ -1507,9 +1516,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                                 type="text"
                                 value={inlineEditData.farmerGivenName}
                                 onChange={(e) =>
-                                  setInlineEditData({ ...inlineEditData, farmerGivenName: e.target.value })
+                                  setInlineEditData({ ...inlineEditData, farmerGivenName: e.target.value.toUpperCase() })
                                 }
-                                className="w-1/2 px-1.5 py-0.5 bg-white border border-stone-300 rounded text-[11px] font-medium text-stone-900 focus:ring-2 focus:ring-emerald-600 shadow-2xs"
+                                className="w-1/3 px-1.5 py-0.5 bg-white border border-stone-300 rounded uppercase text-[11px] font-medium text-stone-900 focus:ring-2 focus:ring-emerald-600 shadow-2xs"
                                 placeholder="Given Name"
                                 title="Given Name"
                               />
@@ -1517,11 +1526,23 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                                 type="text"
                                 value={inlineEditData.farmerMiddleName}
                                 onChange={(e) =>
-                                  setInlineEditData({ ...inlineEditData, farmerMiddleName: e.target.value })
+                                  setInlineEditData({ ...inlineEditData, farmerMiddleName: e.target.value.toUpperCase() })
                                 }
-                                className="w-1/2 px-1.5 py-0.5 bg-white border border-stone-300 rounded text-[11px] text-stone-700 focus:ring-2 focus:ring-emerald-600 shadow-2xs"
+                                className="w-1/3 px-1.5 py-0.5 bg-white border border-stone-300 rounded uppercase text-[11px] text-stone-700 focus:ring-2 focus:ring-emerald-600 shadow-2xs"
                                 placeholder="Middle"
                                 title="Middle Name"
+                              />
+                              <input
+                                type="text"
+                                value={inlineEditData.farmerSuffix}
+                                onChange={(event) => setInlineEditData({
+                                  ...inlineEditData,
+                                  farmerSuffix: event.target.value.replace(/,/g, '').toUpperCase()
+                                })}
+                                className="w-1/3 rounded border border-stone-300 px-1.5 py-0.5 text-[11px] uppercase text-stone-700"
+                                placeholder="Suffix"
+                                aria-label="Suffix"
+                                maxLength={24}
                               />
                             </div>
                           </div>
@@ -1538,7 +1559,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                           >
                             {BARANGAYS.map((b) => (
                               <option key={b.name} value={b.name}>
-                                {b.name}
+                                {getBarangayLabel(b.name, barangayProfiles)}
                               </option>
                             ))}
                           </select>
@@ -1753,7 +1774,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
                       {/* 4. BARANGAY */}
                       <td className="w-36 min-w-[130px] py-2 px-3 whitespace-nowrap text-xs font-semibold text-gov-ink border-r border-stone-200">
-                        {getDisplayBarangay(parcel.barangay)}
+                        {getBarangayLabel(getDisplayBarangay(parcel.barangay), barangayProfiles)}
                       </td>
 
                       {/* 5. RICE VARIETY */}
@@ -2326,7 +2347,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       />
 
       {/* Printable Summary Report Modal (PDF format) matching Swine Registry style */}
-      {showPrintSummaryModal && (
+      {permissions.canExportDatabase && showPrintSummaryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-3 sm:p-6 overflow-y-auto animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden my-6 border border-slate-200">
             {/* Top Toolbar */}

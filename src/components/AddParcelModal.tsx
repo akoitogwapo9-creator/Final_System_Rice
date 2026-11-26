@@ -7,6 +7,7 @@ import {
   OFFICIAL_15_BARANGAYS,
   getAssignedLftForBarangay,
   getBarangayZone,
+  getBarangayLabel,
   getDisplayBarangay,
   getUserAssignedBarangays,
   isUserAuthorizedForBarangay,
@@ -89,6 +90,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 }) => {
   const {
     currentUser,
+    barangayProfiles,
     permissions,
     ecosystems,
     tenures,
@@ -210,10 +212,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
       setFormData({
         ...editingParcel,
-        farmerFamilyName: fam,
-        farmerGivenName: giv,
-        farmerMiddleName: mid,
-        farmerSuffix: editingParcel.farmerSuffix ?? parsedName.suffix,
+        farmerFamilyName: fam.toUpperCase(),
+        farmerGivenName: giv.toUpperCase(),
+        farmerMiddleName: mid.toUpperCase(),
+        farmerSuffix: (editingParcel.farmerSuffix ?? parsedName.suffix)?.toUpperCase(),
         weightKg:
           Number(editingParcel.weightKg || editingParcel.areaHa || editingParcel.farm_area_ha) ||
           1.25,
@@ -537,6 +539,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
   // Keep Full Name synchronized cleanly without leaving trailing commas
   const handleNameChange = (field: 'family' | 'given' | 'middle' | 'suffix', val: string) => {
+    val = val.toUpperCase();
     setFormData((prev) => {
       const fam = field === 'family' ? val : prev.farmerFamilyName || '';
       const giv = field === 'given' ? val : prev.farmerGivenName || '';
@@ -596,6 +599,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
   // Photo upload handler: uploads directly to Supabase Storage 'farm-photos' bucket
   const handlePhotoUpload = async (field: 'photoUrl' | 'fieldPhotoUrl', file: File) => {
+    if (!currentUser) return;
     const isField = field === 'fieldPhotoUrl';
     if (isField) setIsUploadingFieldPhoto(true);
     else setIsUploadingPhoto(true);
@@ -773,7 +777,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
   // 3. Submission handler with Supabase unique constraint (23505) error handling
   const submitRegistration = async () => {
-    if (activeStep !== 3 || isSubmitting || isUploadingPhoto || isUploadingFieldPhoto || geoLoading) return;
+    if (!currentUser || activeStep !== 3 || isSubmitting || isUploadingPhoto || isUploadingFieldPhoto || geoLoading) return;
     setError(null);
     setUniqueViolationAlert(null);
 
@@ -821,10 +825,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       farmerFamilyName: formData.farmerFamilyName || '',
       farmerGivenName: formData.farmerGivenName || '',
       farmerMiddleName: formData.farmerMiddleName || '',
-      farmerSuffix: formData.farmerSuffix?.trim() || '',
+      farmerSuffix: formData.farmerSuffix?.trim().toUpperCase() || '',
       birthday: formData.birthday || '',
       farmLocation: formData.farmLocation || targetBrgy.toUpperCase(),
-      raiserName: finalRaiserName,
+      raiserName: finalRaiserName.toUpperCase(),
       barangay: targetBrgy,
       purok: formData.purok || 'Purok Riverside',
       address: formData.residential_address || formData.address || `${targetBrgy}, Silago, Southern Leyte`,
@@ -1168,13 +1172,6 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                           placeholder={formSchema.getPlaceholder('reg-parcel-id', 'e.g. FARMER-SLG-POB1-101')}
                           className={`${OFFICE_INPUT_CLASS} font-mono font-semibold`}
                         />
-                        <p className="text-[11px] text-slate-500">
-                          {editingParcel
-                            ? 'Saved parcel ID'
-                            : parcelIdOverridden
-                              ? 'Manual ID. Barangay changes keep this value.'
-                              : 'The code follows the residential barangay until you edit this ID.'}
-                        </p>
                       </div>
                     )}
 
@@ -1293,10 +1290,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                           value={formData.farmerSuffix || ''}
                           onChange={(e) => handleNameChange('suffix', e.target.value.replace(/,/g, ''))}
                           placeholder={formSchema.getPlaceholder('reg-suffix', 'None')}
-                          className={OFFICE_INPUT_CLASS}
+                          className={`${OFFICE_INPUT_CLASS} uppercase`}
                         />
                         <datalist id={`${suffixId}-options`}>
-                          {['Jr.', 'Sr.', 'II', 'III', 'IV'].map((suffix) => <option key={suffix} value={suffix} />)}
+                          {['JR.', 'SR.', 'II', 'III', 'IV'].map((suffix) => <option key={suffix} value={suffix} />)}
                         </datalist>
                       </div>
                     )}
@@ -1421,8 +1418,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                           )}
                           {(['Coastal', 'Upland'] as const).map((zone) => (
                             <optgroup key={zone} label={zone}>
-                              {OFFICIAL_15_BARANGAYS.filter((b) => getBarangayZone(b) === zone).map((b) => (
-                                <option key={b} value={b}>{b}</option>
+                              {OFFICIAL_15_BARANGAYS.filter((b) => getBarangayZone(b, barangayProfiles) === zone).map((b) => (
+                                <option key={b} value={b}>{getBarangayLabel(b, barangayProfiles)}</option>
                               ))}
                             </optgroup>
                           ))}
@@ -1531,8 +1528,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                           >
                             {(['Coastal', 'Upland'] as const).map((zone) => (
                             <optgroup key={zone} label={zone}>
-                              {availableBarangays.filter((b) => getBarangayZone(b.name) === zone).map((b) => (
-                                <option key={b.name} value={b.name}>{b.name}</option>
+                              {availableBarangays.filter((b) => getBarangayZone(b.name, barangayProfiles) === zone).map((b) => (
+                                <option key={b.name} value={b.name}>{getBarangayLabel(b.name, barangayProfiles)}</option>
                               ))}
                             </optgroup>
                           ))}
@@ -1713,10 +1710,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                         ['reg-family-name', 'Family Name', formData.farmerFamilyName],
                         ['reg-given-name', 'Given Name', formData.farmerGivenName],
                         ['reg-middle-name', 'Middle Name', formData.farmerMiddleName],
-                        ['reg-suffix', 'Suffix', formData.farmerSuffix || 'None'],
+                        ['reg-suffix', 'Suffix', formData.farmerSuffix || 'NONE'],
                         ['reg-contact', 'Mobile / Contact No.', formData.contactNumber],
                         ['reg-birthday', 'Date of Birth', formData.birthday],
-                        ['reg-res-barangay', 'Residential Barangay', selectedResidentialBarangay],
+                        ['reg-res-barangay', 'Residential Barangay', getBarangayLabel(selectedResidentialBarangay, barangayProfiles)],
                         ['', 'Municipality & Province', 'Silago, Southern Leyte']
                       ],
                       photo: formData.photoUrl,
@@ -1725,7 +1722,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                     {
                       title: sec2Label,
                       fields: [
-                        ['reg-farm-barangay', 'Farm Location Barangay', `${formData.barangay} (${getBarangayZone(formData.barangay || effectiveDefaultBarangay)})`],
+                        ['reg-farm-barangay', 'Farm Location Barangay', `${getBarangayLabel(formData.barangay || effectiveDefaultBarangay, barangayProfiles)} (${getBarangayZone(formData.barangay || effectiveDefaultBarangay, barangayProfiles)})`],
                         ['reg-purok', 'Purok / Sitio', formData.purok],
                         ['reg-area', 'Farm Area (Hectares)', formData.weightKg],
                         ['reg-lat', 'Latitude', formData.lat],

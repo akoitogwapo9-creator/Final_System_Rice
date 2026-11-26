@@ -35,7 +35,7 @@ const parseFarmerName = (parcel: FarmParcel) => {
   if (parcel.farmerFamilyName && parcel.farmerGivenName) {
     return {
       family: parcel.farmerFamilyName.trim().toUpperCase(),
-      given: [parcel.farmerGivenName.trim().toUpperCase(), parcel.farmerSuffix?.trim()].filter(Boolean).join(' '),
+      given: [parcel.farmerGivenName.trim().toUpperCase(), parcel.farmerSuffix?.trim().toUpperCase()].filter(Boolean).join(' '),
       middle: (parcel.farmerMiddleName || '').trim().toUpperCase()
     };
   }

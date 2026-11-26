@@ -600,6 +600,7 @@ export const EvaluationView: React.FC = () => {
   });
 
   const handleRatingChange = (id: string, score: number) => {
+    if (!currentUser) return;
     setRatings((prev) => ({
       ...prev,
       [id]: score
@@ -607,6 +608,7 @@ export const EvaluationView: React.FC = () => {
   };
 
   const handleSetAllRatings = (score: number) => {
+    if (!currentUser) return;
     const updated: Record<string, number> = {};
     ISO_EVALUATION_ITEMS.forEach((item) => {
       updated[item.id] = score;
@@ -732,7 +734,7 @@ export const EvaluationView: React.FC = () => {
               <span>{isCeb ? 'Language: CEB' : 'Language: EN'}</span>
             </button>
 
-            <button
+            {currentUser && <button
               type="button"
               onClick={handlePrint}
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-lg active:scale-95"
@@ -740,8 +742,8 @@ export const EvaluationView: React.FC = () => {
             >
               <Printer className="w-4 h-4" />
               <span>{isCeb ? 'I-export ang Report sa PDF / I-print' : 'Export Evaluation Report to PDF / Print'}</span>
-            </button>
-            <button
+            </button>}
+            {currentUser && <button
               type="button"
               onClick={() => handleSetAllRatings(5)}
               className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer border border-white/15 active:scale-95"
@@ -749,7 +751,7 @@ export const EvaluationView: React.FC = () => {
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-300" />
               <span>{isCeb ? 'I-set Tanan (5)' : 'Set All (5)'}</span>
-            </button>
+            </button>}
           </div>
         </div>
       </div>
@@ -870,7 +872,8 @@ export const EvaluationView: React.FC = () => {
             <input
               type="text"
               value={evaluatorName}
-              onChange={(e) => setEvaluatorName(e.target.value)}
+              readOnly={!currentUser}
+              onChange={(e) => currentUser && setEvaluatorName(e.target.value)}
               placeholder={isCeb ? 'pananglitan: Engr. Juan Dela Cruz' : 'e.g. Engr. Juan Dela Cruz'}
               className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none font-medium"
             />
@@ -884,7 +887,8 @@ export const EvaluationView: React.FC = () => {
             <input
               type="text"
               value={evaluatorPosition}
-              onChange={(e) => setEvaluatorPosition(e.target.value)}
+              readOnly={!currentUser}
+              onChange={(e) => currentUser && setEvaluatorPosition(e.target.value)}
               placeholder={isCeb ? 'pananglitan: IT Specialist / Agriculture Officer' : 'e.g. IT Specialist / Agriculture Officer'}
               className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none font-medium"
             />
@@ -898,7 +902,8 @@ export const EvaluationView: React.FC = () => {
             <input
               type="text"
               value={evaluatorOffice}
-              onChange={(e) => setEvaluatorOffice(e.target.value)}
+              readOnly={!currentUser}
+              onChange={(e) => currentUser && setEvaluatorOffice(e.target.value)}
               placeholder={isCeb ? 'pananglitan: DA-MAO Silago / SLSU Hinunangan' : 'e.g. DA-MAO Silago / SLSU Hinunangan'}
               className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none font-medium"
             />
@@ -912,7 +917,8 @@ export const EvaluationView: React.FC = () => {
             <input
               type="date"
               value={evaluationDate}
-              onChange={(e) => setEvaluationDate(e.target.value)}
+              readOnly={!currentUser}
+              onChange={(e) => currentUser && setEvaluationDate(e.target.value)}
               className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none font-medium"
             />
           </div>
@@ -996,6 +1002,7 @@ export const EvaluationView: React.FC = () => {
                             <button
                               key={score}
                               type="button"
+                              disabled={!currentUser}
                               onClick={() => handleRatingChange(item.id, score)}
                               className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl font-black text-xs sm:text-sm flex items-center justify-center transition-all cursor-pointer select-none ${
                                 isSelected
@@ -1035,7 +1042,8 @@ export const EvaluationView: React.FC = () => {
         <textarea
           rows={3}
           value={evaluatorNotes}
-          onChange={(e) => setEvaluatorNotes(e.target.value)}
+          readOnly={!currentUser}
+              onChange={(e) => currentUser && setEvaluatorNotes(e.target.value)}
           placeholder={
             isCeb
               ? 'Ibutang dinhi ang bisan unsang piho nga rekomendasyon, komento, o obserbasyon alang sa dugang kalamboan sa sistema...'

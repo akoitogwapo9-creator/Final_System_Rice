@@ -369,7 +369,7 @@ export const SubsidiesView: React.FC = () => {
         return false;
       }
       if (!q) return true;
-      const haystack = `${entry.ownerName} ${entry.rsbsaNo} ${entry.parcelTag} ${entry.barangay} ${entry.inputType} ${entry.itemGiven} ${entry.programTitle} ${entry.fundingSource} ${entry.slipOrVoucherNo || ''} ${entry.recipientName || ''}`.toLowerCase();
+      const haystack = `${entry.ownerName.toUpperCase()} ${entry.rsbsaNo} ${entry.parcelTag} ${entry.barangay} ${entry.inputType} ${entry.itemGiven} ${entry.programTitle} ${entry.fundingSource} ${entry.slipOrVoucherNo || ''} ${entry.recipientName || ''}`.toLowerCase();
       return haystack.includes(q);
     });
   }, [unifiedHistoryEntries, historyTypeFilter, barangayFilter, searchQuery, currentUser]);
@@ -577,7 +577,7 @@ export const SubsidiesView: React.FC = () => {
         fundingSource: logGiveawayDraft.fundingSource.trim() || 'DA / LGU-Silago',
         parcelTag: parcel.tagNumber,
         rsbsaNo: parcel.swineNameOrId || parcel.rsbsa_no || '',
-        ownerName: parcel.raiserName,
+        ownerName: parcel.raiserName.toUpperCase(),
         barangay: parcel.barangay,
         inputType: logGiveawayDraft.inputType,
         itemGiven: logGiveawayDraft.itemGiven.trim() || logGiveawayDraft.inputType,
@@ -675,7 +675,7 @@ export const SubsidiesView: React.FC = () => {
           h.inputType,
           h.itemGiven,
           h.quantityGiven,
-          h.ownerName,
+          h.ownerName.toUpperCase(),
           h.rsbsaNo,
           h.parcelTag,
           h.barangay,
@@ -1224,7 +1224,7 @@ export const SubsidiesView: React.FC = () => {
                           </td>
 
                           <td className="py-2.5 px-2.5 align-top">
-                            <div className="font-bold text-slate-900 leading-snug">{parcel.raiserName}</div>
+                            <div className="font-bold text-slate-900 leading-snug">{parcel.raiserName.toUpperCase()}</div>
                             <div className="text-[11px] text-slate-700 font-medium mt-0.5">
                               Brgy. {parcel.barangay} &bull; {areaHa.toFixed(2)} ha
                               {parcel.variety || parcel.breed ? ` • ${parcel.variety || parcel.breed}` : ''}
@@ -1516,7 +1516,7 @@ export const SubsidiesView: React.FC = () => {
                             {entry.dateGiven || '—'}
                           </td>
                           <td className="py-2.5 px-2.5 align-top">
-                            <div className="font-bold text-slate-900">{entry.ownerName}</div>
+                            <div className="font-bold text-slate-900">{entry.ownerName.toUpperCase()}</div>
                             <div className="text-[11px] text-slate-500">
                               Brgy. {entry.barangay} &bull; RSBSA: {entry.rsbsaNo || 'Unrecorded'}
                             </div>

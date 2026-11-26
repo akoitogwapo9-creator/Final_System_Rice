@@ -1,7 +1,7 @@
 import { SeasonProductionPanel } from '../components/SeasonProductionPanel';
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { BARANGAYS, getBarangayZone, matchBarangay } from '../data/barangays';
+import { BARANGAYS, getBarangayLabel, getBarangayZone, matchBarangay } from '../data/barangays';
 import { calculateCropGrowthStage } from '../data/riceVarieties';
 import { FarmParcel, Barangay, PortalTab } from '../types';
 import { OfficeKpiStrip, OfficePanel } from '../components/OfficeFormPrimitives';
@@ -188,7 +188,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenCropPlanting,
   onSelectBarangay
 }) => {
-  const { parcels, lftAccounts, permissions } = useApp();
+  const { parcels, lftAccounts, permissions, barangayProfiles } = useApp();
   const [selectedBarangay, setSelectedBarangay] = useState('ALL');
   const [metric, setMetric] = useState<DashboardMetric>('ecosystem');
   const [chartStyle, setChartStyle] = useState<ChartStyle>('bar');
@@ -364,8 +364,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <option value="ALL">All 15 Barangays</option>
                 {(['Coastal', 'Upland'] as const).map((zone) => (
                   <optgroup key={zone} label={zone}>
-                    {BARANGAYS.filter((barangay) => getBarangayZone(barangay.name) === zone).map((barangay) => (
-                      <option key={barangay.name} value={barangay.name}>Brgy. {barangay.name}</option>
+                    {BARANGAYS.filter((barangay) => getBarangayZone(barangay.name, barangayProfiles) === zone).map((barangay) => (
+                      <option key={barangay.name} value={barangay.name}>Brgy. {getBarangayLabel(barangay.name, barangayProfiles)}</option>
                     ))}
                   </optgroup>
                 ))}
@@ -634,7 +634,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="mb-1 flex justify-between gap-2 font-medium text-slate-800">
-                        <span className="truncate font-semibold">Brgy. {row.barangay.name}</span>
+                        <span className="truncate font-semibold">Brgy. {getBarangayLabel(row.barangay.name, barangayProfiles)}</span>
                         <span className="shrink-0 font-semibold text-slate-700 tabular-nums">
                           {row.count} farms &middot; {row.area.toFixed(2)} ha
                         </span>

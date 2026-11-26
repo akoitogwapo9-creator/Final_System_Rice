@@ -62,7 +62,16 @@ export const UPLAND_BARANGAYS: OfficialBarangay[] = [
   'San Isidro'
 ];
 
-export function getBarangayZone(name: string): 'Coastal' | 'Upland' {
+export type BarangayClassification = 'Coastal' | 'Upland';
+export type BarangayProfiles = Record<string, { displayName: string; classification: BarangayClassification }>;
+
+export function getBarangayLabel(name: string, profiles: BarangayProfiles): string {
+  return profiles[getDisplayBarangay(name)]?.displayName || name;
+}
+
+export function getBarangayZone(name: string, profiles?: BarangayProfiles): BarangayClassification {
+  const saved = profiles?.[getDisplayBarangay(name)]?.classification;
+  if (saved === 'Coastal' || saved === 'Upland') return saved;
   const norm = (name || '').trim().toLowerCase();
   if (UPLAND_BARANGAYS.some((b) => b.toLowerCase() === norm || norm.includes(b.toLowerCase()))) {
     return 'Upland';

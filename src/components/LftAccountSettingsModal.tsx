@@ -30,8 +30,7 @@ export const LftAccountSettingsModal: React.FC<LftAccountSettingsModalProps> = (
   const {
     currentUser,
     updateCurrentUserProfile,
-    updateCurrentUserPassword,
-    verifyCurrentUserPassword
+    updateCurrentUserPassword
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'profile' | 'security'>('profile');
@@ -101,17 +100,13 @@ export const LftAccountSettingsModal: React.FC<LftAccountSettingsModalProps> = (
     showToast('success', 'Your LFT account profile has been updated!');
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentPassword) {
       showToast('error', 'Please enter your current account password.');
       return;
     }
 
-    if (!verifyCurrentUserPassword(currentPassword)) {
-      showToast('error', 'Current password is incorrect.');
-      return;
-    }
 
     if (newPassword.length < 6) {
       showToast('error', 'New password must be at least 6 characters.');
@@ -123,7 +118,11 @@ export const LftAccountSettingsModal: React.FC<LftAccountSettingsModalProps> = (
       return;
     }
 
-    updateCurrentUserPassword(newPassword);
+    const passwordError = await updateCurrentUserPassword(currentPassword, newPassword);
+    if (passwordError) {
+      showToast('error', passwordError);
+      return;
+    }
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');

@@ -54,7 +54,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
     currentUser,
     updateCurrentUserProfile,
     updateCurrentUserPassword,
-    verifyCurrentUserPassword,
     adminProfile,
     updateAdminProfile,
     parcels,
@@ -327,7 +326,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
     showToast('success', 'Central Administrator profile updated successfully.');
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentPassword) {
       showToast('error', 'Please enter your current administrative password.');
@@ -343,7 +342,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
     }
 
     // Save password to Cloud Database
-    updateCurrentUserPassword(newPassword);
+    const passwordError = await updateCurrentUserPassword(currentPassword, newPassword);
+    if (passwordError) {
+      showToast('error', passwordError);
+      return;
+    }
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
@@ -634,14 +637,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
     showToast('success', 'LFT Officer profile details updated successfully.');
   };
 
-  const handleLftChangePassword = (e: React.FormEvent) => {
+  const handleLftChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!lftCurrentPass) {
       showToast('error', 'Please enter your current account password.');
-      return;
-    }
-    if (!verifyCurrentUserPassword(lftCurrentPass)) {
-      showToast('error', 'Current password is incorrect.');
       return;
     }
     if (lftNewPass.length < 6) {
@@ -652,7 +651,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
       showToast('error', 'New password and confirmation do not match.');
       return;
     }
-    updateCurrentUserPassword(lftNewPass);
+    const passwordError = await updateCurrentUserPassword(lftCurrentPass, lftNewPass);
+    if (passwordError) {
+      showToast('error', passwordError);
+      return;
+    }
     setLftCurrentPass('');
     setLftNewPass('');
     setLftConfirmPass('');

@@ -1,3 +1,5 @@
+import { useApp } from '../context/AppContext';
+import { BarangayClassification, getBarangayLabel, getBarangayZone, matchBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
 import React, { useState, useEffect } from 'react';
 import { Barangay, FarmParcel } from '../types';
 import { X, MapPin, User, Phone, Wheat, Droplets, Compass, Layers, ChevronRight, Pencil, Save, RotateCcw, Check } from 'lucide-react';
@@ -30,10 +32,16 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
   onSelectParcel,
   onViewOnMap,
   onUpdateBarangay,
-  canEdit = true
+  canEdit = false
 }) => {
-  const [isEditing, setIsEditing] = useState(false);
+  const { permissions, barangayProfiles, updateBarangayProfile } = useApp();
+  const mayEdit = canEdit && permissions.isCentralAdmin;
+  const [editing, setIsEditing] = useState(false);
+  const isEditing = editing && mayEdit;
+  const [draftName, setDraftName] = useState('');
+  const [draftClassification, setDraftClassification] = useState<BarangayClassification>('Coastal');
   const [saveNotice, setSaveNotice] = useState('');
+  const [saving, setSaving] = useState(false);
 
   // Draft state for editable fields
   const [draftFocalPerson, setDraftFocalPerson] = useState('');
@@ -51,9 +59,11 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
     if (barangay) {
       resetDrafts(barangay);
     }
-  }, [barangay]);
+  }, [barangay, barangayProfiles]);
 
   const resetDrafts = (b: Barangay) => {
+    setDraftName(getBarangayLabel(b.name, barangayProfiles));
+    setDraftClassification(getBarangayZone(b.name, barangayProfiles));
     setDraftFocalPerson(b.focalPerson || '');
     setDraftContactNumber(b.contactNumber || '');
     setDraftTerrain(b.terrain || '');
@@ -68,10 +78,11 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
   if (!barangay) return null;
 
   const brgyParcels = parcels.filter(
-    (p) => p.barangay.toLowerCase() === barangay.name.toLowerCase()
+    (p) => matchBarangay(p.barangay, barangay.name)
   );
 
   const handleEnterEdit = () => {
+    if (!mayEdit) return;
     resetDrafts(barangay);
     setIsEditing(true);
     setSaveNotice('');
@@ -83,7 +94,16 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
     setSaveNotice('');
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (!mayEdit || saving || !draftName.trim()) return;
+    const displayName = draftName.trim();
+    if (OFFICIAL_15_BARANGAYS.some((name) =>
+      name !== barangay.name && getBarangayLabel(name, barangayProfiles).toLowerCase() === displayName.toLowerCase()
+    )) {
+      setSaveNotice('That barangay name is already in use.');
+      return;
+    }
+    setSaving(true);
     const updates: Partial<Barangay> = {
       focalPerson: draftFocalPerson.trim(),
       contactNumber: draftContactNumber.trim(),
@@ -120,8 +140,10 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
       // localStorage might be unavailable
     }
 
+    const synced = await updateBarangayProfile(barangay.name, { displayName, classification: draftClassification });
+    setSaving(false);
     setIsEditing(false);
-    setSaveNotice(`Barangay ${barangay.name} details saved successfully.`);
+    setSaveNotice(synced ? `Barangay ${displayName} details saved.` : 'Saved on this device. Supabase sync could not be confirmed.');
     setTimeout(() => setSaveNotice(''), 4000);
   };
 
@@ -153,18 +175,18 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
                   {barangay.asfStatus}
                 </span>
                 <span className="text-xs text-slate-300">
-                  Sector: {isEditing ? draftTerrain : barangay.terrain}
+                  Sector: {isEditing ? draftClassification : getBarangayZone(barangay.name, barangayProfiles)}
                 </span>
               </div>
               <h2 className="text-2xl sm:text-3xl font-serif font-bold text-white mt-1">
-                Barangay {barangay.name}
+                Barangay {getBarangayLabel(barangay.name, barangayProfiles)}
               </h2>
               <p className="text-xs text-emerald-200/80 mt-0.5">
                 Municipality of Silago, Southern Leyte • {isEditing ? draftPuroks : barangay.puroks} Designated Puroks / Sitios
               </p>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
-              {canEdit && !isEditing && (
+              {mayEdit && !isEditing && (
                 <button
                   onClick={handleEnterEdit}
                   type="button"
@@ -263,6 +285,26 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
           {/* Terrain & Puroks (Editable) */}
           {isEditing && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="space-y-1 text-xs font-semibold text-slate-700">
+                <span>Barangay Name</span>
+                <input
+                  value={draftName}
+                  onChange={(event) => setDraftName(event.target.value)}
+                  className={inputClass}
+                  maxLength={100}
+                />
+              </label>
+              <label className="space-y-1 text-xs font-semibold text-slate-700">
+                <span>Classification</span>
+                <select
+                  value={draftClassification}
+                  onChange={(event) => setDraftClassification(event.target.value as BarangayClassification)}
+                  className={selectClass}
+                >
+                  <option value="Coastal">Coastal</option>
+                  <option value="Upland">Upland</option>
+                </select>
+              </label>
               <div className="space-y-1">
                 <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">
                   Agro-Ecosystem / Terrain Zone
@@ -413,7 +455,7 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
             <div className="flex items-center justify-between mb-2.5">
               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                 <Wheat className="w-4 h-4 text-emerald-600" />
-                Georeferenced Farm Parcels in Brgy. {barangay.name} ({brgyParcels.length})
+                Georeferenced Farm Parcels in Brgy. {getBarangayLabel(barangay.name, barangayProfiles)} ({brgyParcels.length})
               </h4>
             </div>
 
@@ -477,7 +519,8 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
               </button>
               <button
                 type="button"
-                onClick={handleSave}
+                disabled={saving || !draftName.trim()}
+                  onClick={handleSave}
                 className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-sm"
               >
                 <Save className="w-3.5 h-3.5" />

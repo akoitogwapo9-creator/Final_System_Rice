@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import { User, FarmParcel, Language, BackgroundPreset, LftAccount, SeasonalProductionRecord, OfficeContactInfo, PortalTab, MunicipalBrandingSettings, LandingPageConfig, MandateCardItem, GovernmentSubsidyProgram, SubsidyCategory, SubsidyClaimRecord, SubsidyHistoryEntry, isAccountActive } from '../types';
-import { BARANGAYS, getAssignedLftForBarangay, isUserAuthorizedForBarangay } from '../data/barangays';
+import { BARANGAYS, BarangayProfiles, getAssignedLftForBarangay, isUserAuthorizedForBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
 import { DEFAULT_BG_PHOTO, DEFAULT_SLSU_PHOTO, SLSU_DEFAULTS, PRESET_BACKGROUNDS } from '../data/photos';
 import { DEFAULT_SUBSIDY_PROGRAMS } from '../data/subsidies';
 import { RiceVariety, RICE_VARIETIES, mergeRequiredRiceVarieties } from '../data/riceVarieties';
@@ -27,7 +27,7 @@ import {
   canUserManageLftAccounts,
   UserPermissions
 } from '../utils/rbac';
-import { hashPasswordSync, verifyPasswordHash, isHashedPassword } from '../utils/security';
+import { hashPasswordSync, isHashedPassword } from '../utils/security';
 import { LegalDecree, DEFAULT_LEGAL_DECREES, normalizeDecreeList } from '../data/legalDecrees';
 import {
   FORM_SCHEMA_STORAGE_KEY,
@@ -208,9 +208,7 @@ interface AppContextType {
   currentUser: User | null;
   setCurrentUser: (user: User | null | ((prev: User | null) => User | null)) => void;
   updateCurrentUserProfile: (profile: Partial<User>) => void;
-  updateCurrentUserPassword: (newPassword: string) => void;
-  verifyCurrentUserPassword: (password: string) => boolean;
-  resetStaffPassword: (identifier: string, newPassword: string) => boolean;
+  updateCurrentUserPassword: (currentPassword: string, newPassword: string) => Promise<string | null>;
   parcels: FarmParcel[];
   addParcel: (parcel: FarmParcel) => Promise<void>;
   updateParcel: (tagNumber: string, updated: Partial<FarmParcel>) => Promise<void>;
@@ -277,8 +275,6 @@ interface AppContextType {
     office: string;
     photoUrl?: string;
   }>) => void;
-  verifyAdminPassword: (password: string) => boolean;
-  updateAdminPassword: (newPassword: string) => void;
 
   slsuPhotoUrl: string;
   setSlsuPhotoUrl: (url: string) => void;
@@ -432,19 +428,61 @@ interface AppContextType {
   fetchParcels: () => Promise<void>;
   mapFarmerToParcel: (row: any) => FarmParcel;
 
+  barangayProfiles: BarangayProfiles;
+  updateBarangayProfile: (name: string, profile: BarangayProfiles[string]) => Promise<boolean>;
+
   // User Session & Auth Loading State
   isLoading: boolean;
   isAuthLoading: boolean;
 }
+
+function normalizeParcelNames(parcel: FarmParcel): FarmParcel {
+  const { farmerFamilyName, farmerGivenName, farmerMiddleName, farmerSuffix, raiserName } = normalizeFarmParcel(parcel);
+  return { ...parcel, farmerFamilyName, farmerGivenName, farmerMiddleName, farmerSuffix, raiserName };
+}
+
+const BARANGAY_PROFILES_KEY = 'silago_barangay_profiles';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
+  const [barangayProfiles, setBarangayProfiles] = useState<BarangayProfiles>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(BARANGAY_PROFILES_KEY) || '{}') || {};
+    } catch {
+      return {};
+    }
+  });
+
+  const applyBarangayProfiles = useCallback((profiles: BarangayProfiles) => {
+    setBarangayProfiles(profiles);
+    try {
+      localStorage.setItem(BARANGAY_PROFILES_KEY, JSON.stringify(profiles));
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void supabaseDb.getSetting<BarangayProfiles>(BARANGAY_PROFILES_KEY).then((profiles) => {
+      if (active && profiles) applyBarangayProfiles(profiles);
+    });
+    return () => { active = false; };
+  }, [applyBarangayProfiles]);
+
+  const updateBarangayProfile = async (name: string, profile: BarangayProfiles[string]) => {
+    if (currentUser?.role !== 'Central Admin' || !OFFICIAL_15_BARANGAYS.some((item) => item === name)) return false;
+    const displayName = profile.displayName.trim();
+    if (!displayName || (profile.classification !== 'Coastal' && profile.classification !== 'Upland')) return false;
+    const next = { ...barangayProfiles, [name]: { ...profile, displayName } };
+    applyBarangayProfiles(next);
+    return supabaseDb.setSetting(BARANGAY_PROFILES_KEY, next);
+  };
+
   // Active Navigation Tab State (persisted per session in sessionStorage & URL state)
   const [activeTab, setActiveTabState] = useState<PortalTab>(() => {
-    const publicSafeTabs: PortalTab[] = ['eartags', 'reports', 'evaluation', 'legal_decrees'];
+    const publicSafeTabs: PortalTab[] = ['eartags', 'reports', 'evaluation', 'legal_decrees', 'map'];
     const sanitizeInitialTab = (candidate: PortalTab | null): PortalTab | null => {
       if (!candidate) return null;
       return publicSafeTabs.includes(candidate) ? candidate : 'eartags';
@@ -483,7 +521,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const resolveAuthorizedSessionUser = async (accessToken: string): Promise<User | null> => {
       const { data: { user }, error } = await supabase.auth.getUser(accessToken);
-      if (error || !user) return null;
+      if (error || !user || user.is_anonymous) return null;
       const userEmail = (user.email || '').trim().toLowerCase();
       const userPhone = (user.phone || '').replace(/\D/g, '');
       const identifier = userEmail || userPhone || user.id;
@@ -571,7 +609,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (!isMounted || change !== authChange) return;
           try {
             const resolvedUser = await resolveAuthorizedSessionUser(session.access_token);
-            if (isMounted && change === authChange) setCurrentUser(resolvedUser);
+            if (isMounted && change === authChange) {
+              setCurrentUser(resolvedUser);
+            }
           } catch (err) {
             console.warn('Session verification notice:', err);
           }
@@ -620,7 +660,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            return sortParcelsAlphabetically(parsed.map(mapFarmerRowToParcel));
+            return sortParcelsAlphabetically(parsed.map(normalizeParcelNames));
           }
         }
       }
@@ -676,7 +716,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (cached) {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              setParcels(sortParcelsAlphabetically(parsed));
+              setParcels(sortParcelsAlphabetically(parsed.map(normalizeParcelNames)));
             }
           }
         } catch {}
@@ -691,7 +731,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setParcels(sortParcelsAlphabetically(parsed));
+            setParcels(sortParcelsAlphabetically(parsed.map(normalizeParcelNames)));
           }
         }
       } catch {}
@@ -736,6 +776,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Manual & Automated Trigger to sync offline pending queue to Supabase
   const syncOfflineQueue = useCallback(async () => {
+    if (!currentUser) return;
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       setSyncNotification('Offline: Internet connection is not available yet.');
       setTimeout(() => setSyncNotification(null), 4000);
@@ -766,19 +807,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Sync offline queue notice:', err);
     }
-  }, [syncWithSupabase]);
+  }, [syncWithSupabase, currentUser]);
 
   // Online / Offline connectivity listener & auto-sync trigger
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      setSyncNotification('Network connection detected. Synchronizing offline queue...');
-      syncOfflineQueue();
+      if (currentUser) {
+        setSyncNotification('Network connection detected. Synchronizing offline queue...');
+        void syncOfflineQueue();
+      }
     };
 
     const handleOffline = () => {
       setIsOnline(false);
-      setSyncNotification('Offline mode: Records will be saved locally and queued for automatic cloud synchronization.');
+      if (currentUser) setSyncNotification('Offline mode: Records will be saved locally and queued for automatic cloud synchronization.');
     };
 
     if (typeof window !== 'undefined') {
@@ -800,11 +843,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         window.removeEventListener('offline', handleOffline);
       }
     };
-  }, [syncOfflineQueue]);
+  }, [syncOfflineQueue, currentUser]);
 
   // Handle App Settings updates from Realtime
   const handleSettingUpsert = useCallback((key: string, value: any) => {
-    if (key === 'silago_language') setLanguageState(value === 'CEB' ? 'CEB' : 'EN');
+    if (key === BARANGAY_PROFILES_KEY && value && typeof value === 'object') applyBarangayProfiles(value);
+    else if (key === 'silago_language') setLanguageState(value === 'CEB' ? 'CEB' : 'EN');
     else if (key === 'silago_bg_photo_url') setBgPhotoUrlState(value);
     else if (key === 'silago_bg_opacity') setBgOpacityState(Number(value));
     else if (key === 'silago_bg_blur') setBgBlurState(Number(value));
@@ -817,7 +861,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     else if (key === 'silago_bagong_pilipinas_logo_url') { setBagongPilipinasLogoUrlState(value); try { if (value) localStorage.setItem('silago_bagong_pilipinas_logo_url', value); else localStorage.removeItem('silago_bagong_pilipinas_logo_url'); } catch {} }
     else if (key === 'silago_portal_banner_url') { setPortalBannerUrlState(value); try { if (value) localStorage.setItem('silago_portal_banner_url', value); else localStorage.removeItem('silago_portal_banner_url'); } catch {} }
     else if (key === 'silago_admin_profile' && value) setAdminProfile(value);
-    else if (key === 'silago_admin_password' && value) setAdminPasswordCache(value);
     else if (key.startsWith('silago_lft_password_') && value) {
       const uname = key.slice('silago_lft_password_'.length).trim().toLowerCase();
       if (uname) {
@@ -891,7 +934,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem(PARCEL_CUSTOM_FIELDS_KEY, JSON.stringify(value));
       } catch {}
     }
-  }, []);
+  }, [applyBarangayProfiles]);
 
   const handleSettingDelete = useCallback((key: string) => {
     if (key === 'silago_da_logo_url') { setDaLogoUrlState(null); try { localStorage.removeItem('silago_da_logo_url'); } catch {} }
@@ -1097,57 +1140,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
       )
-      // --- Broadcast Events for immediate multi-client zero-latency sync ---
-      .on('broadcast', { event: 'parcel_upsert' }, ({ payload }) => {
-        if (!isMounted || !payload?.parcel) return;
-        const incoming = normalizeFarmParcel(payload.parcel);
-        setParcels((prev) => {
-          const idx = prev.findIndex((p) => p.tagNumber === incoming.tagNumber);
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = { ...updated[idx], ...incoming };
-            return updated;
-          }
-          return [incoming, ...prev];
-        });
-      })
-      .on('broadcast', { event: 'parcel_delete' }, ({ payload }) => {
-        if (!isMounted || !payload?.tagNumber) return;
-        setParcels((prev) => prev.filter((p) => p.tagNumber !== payload.tagNumber));
-      })
-      .on('broadcast', { event: 'parcels_sync' }, ({ payload }) => {
-        if (!isMounted || !Array.isArray(payload?.parcels)) return;
-        setParcels(payload.parcels.map(normalizeFarmParcel));
-      })
-      .on('broadcast', { event: 'lft_upsert' }, ({ payload }) => {
-        if (!isMounted || !payload?.account) return;
-        const incoming = normalizeLftAccount(payload.account);
-        setLftAccounts((prev) => {
-          const idx = prev.findIndex((a) => a.id === incoming.id || a.username === incoming.username);
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = { ...updated[idx], ...incoming };
-            return updated;
-          }
-          return [incoming, ...prev];
-        });
-      })
-      .on('broadcast', { event: 'lft_delete' }, ({ payload }) => {
-        if (!isMounted || !payload?.id) return;
-        setLftAccounts((prev) => prev.filter((a) => a.id !== payload.id && a.username !== payload.id));
-      })
-      .on('broadcast', { event: 'lfts_sync' }, ({ payload }) => {
-        if (!isMounted || !Array.isArray(payload?.accounts)) return;
-        setLftAccounts(payload.accounts.map(normalizeLftAccount));
-      })
-      .on('broadcast', { event: 'setting_update' }, ({ payload }) => {
-        if (!isMounted || payload?.key === undefined) return;
-        handleSettingUpsert(payload.key, payload.value);
-      })
-      .on('broadcast', { event: 'setting_delete' }, ({ payload }) => {
-        if (!isMounted || !payload?.key) return;
-        handleSettingDelete(payload.key);
-      })
       .subscribe((status) => {
         if (!isMounted) return;
         if (status === 'SUBSCRIBED') {
@@ -1237,22 +1229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 5. Combined Farmer Name
-    const fam = (parcel.farmerFamilyName || '').trim();
-    const giv = (parcel.farmerGivenName || '').trim();
-    const mid = (parcel.farmerMiddleName || '').trim();
-    const finalFarmerName =
-      fam && giv ? `${fam.toUpperCase()}, ${giv}${mid ? ' ' + mid : ''}`.trim() : parcel.raiserName || 'Registered Farmer';
-
-    const validatedParcel: FarmParcel = {
-      ...parcel,
-      tagNumber: formattedTag,
-      contactNumber: sanitizedContact,
-      farmerFamilyName: fam,
-      farmerGivenName: giv,
-      farmerMiddleName: mid,
-      raiserName: finalFarmerName
-    };
+    const validatedParcel = normalizeParcelNames({ ...parcel, tagNumber: formattedTag, contactNumber: sanitizedContact });
 
     // Optimistically update local parcels state and cached storage immediately
     setParcels((prev) => {
@@ -1298,7 +1275,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!canUserEditParcel(currentUser, existing)) {
         throw new Error('Unauthorized: You do not have permission to modify this farm parcel record.');
       }
-      const targetUpdated: FarmParcel = { ...existing, ...updatedFields };
+      const targetUpdated = normalizeParcelNames({ ...existing, ...updatedFields });
       setParcels((prev) => {
         const updated = prev.map((p) => (p.tagNumber === tagNumber ? targetUpdated : p));
         try {
@@ -1508,8 +1485,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem('silago_language', lang);
       }
     } catch {}
-    supabaseDb.setSetting('silago_language', lang);
-  }, []);
+    if (currentUser?.role === 'Central Admin') void supabaseDb.setSetting('silago_language', lang);
+  }, [currentUser?.role]);
 
   const t = useCallback((keyPath: string, fallback?: string): string => {
     return getTranslation(language, keyPath, fallback);
@@ -1528,6 +1505,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addToBackgroundHistory = (url: string, name?: string, source: 'upload' | 'preset' = 'upload') => {
+    if (currentUser?.role !== 'Central Admin') return;
     const existingIdx = backgroundHistory.findIndex((h) => h.url === url);
     const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     let updated: BackgroundPreset[] = [
@@ -1545,16 +1523,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeFromBackgroundHistory = (id: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     const updated = backgroundHistory.filter((h) => h.id !== id);
     updateHistory(updated);
   };
 
   const clearBackgroundHistory = () => {
+    if (currentUser?.role !== 'Central Admin') return;
     const current = backgroundHistory.find((h) => h.url === bgPhotoUrl);
     updateHistory(current ? [current] : []);
   };
 
   const setBgPhotoUrl = (url: string, name?: string, source: 'upload' | 'preset' = 'upload') => {
+    if (currentUser?.role !== 'Central Admin') return;
     setBgPhotoUrlState(url);
     setBgActiveState(true);
     supabaseDb.setSetting('silago_bg_photo_url', url);
@@ -1563,21 +1544,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setBgOpacity = (val: number) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setBgOpacityState(val);
     supabaseDb.setSetting('silago_bg_opacity', val);
   };
 
   const setBgBlur = (val: number) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setBgBlurState(val);
     supabaseDb.setSetting('silago_bg_blur', val);
   };
 
   const setBgActive = (val: boolean) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setBgActiveState(val);
     supabaseDb.setSetting('silago_bg_active', val);
   };
 
   const removeBgPhoto = () => {
+    if (currentUser?.role !== 'Central Admin') return;
     setBgActiveState(false);
     supabaseDb.setSetting('silago_bg_active', false);
   };
@@ -1603,6 +1588,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const setDaLogoUrl = (url: string | null) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setDaLogoUrlState(url);
     try {
       if (url) localStorage.setItem('silago_da_logo_url', url);
@@ -1613,6 +1599,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setSilagoLogoUrl = (url: string | null) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSilagoLogoUrlState(url);
     try {
       if (url) localStorage.setItem('silago_seal_url', url);
@@ -1623,6 +1610,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setBagOngSilagoLogoUrl = (url: string | null) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setBagOngSilagoLogoUrlState(url);
     try {
       if (url) localStorage.setItem('silago_bag_ong_logo_url', url);
@@ -1633,6 +1621,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setSouthernLeyteLogoUrl = (url: string | null) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSouthernLeyteLogoUrlState(url);
     try {
       if (url) localStorage.setItem('silago_southern_leyte_logo_url', url);
@@ -1643,6 +1632,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setBagongPilipinasLogoUrl = (url: string | null) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setBagongPilipinasLogoUrlState(url);
     try {
       if (url) localStorage.setItem('silago_bagong_pilipinas_logo_url', url);
@@ -1653,6 +1643,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setPortalBannerUrl = (url: string | null) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setPortalBannerUrlState(url);
     try {
       if (url) localStorage.setItem('silago_portal_banner_url', url);
@@ -1663,6 +1654,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSystemLogo = (key: keyof SystemLogos, url: string | null) => {
+    if (currentUser?.role !== 'Central Admin') return;
     switch (key) {
       case 'daLogoUrl': setDaLogoUrl(url); break;
       case 'silagoLogoUrl': setSilagoLogoUrl(url); break;
@@ -1674,6 +1666,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setSystemLogos = (logos: Partial<SystemLogos>) => {
+    if (currentUser?.role !== 'Central Admin') return;
     if (logos.daLogoUrl !== undefined) setDaLogoUrl(logos.daLogoUrl);
     if (logos.silagoLogoUrl !== undefined) setSilagoLogoUrl(logos.silagoLogoUrl);
     if (logos.bagOngSilagoLogoUrl !== undefined) setBagOngSilagoLogoUrl(logos.bagOngSilagoLogoUrl);
@@ -1692,6 +1685,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }), [daLogoUrl, silagoLogoUrl, bagOngSilagoLogoUrl, southernLeyteLogoUrl, bagongPilipinasLogoUrl, portalBannerUrl]);
 
   const resetLogos = () => {
+    if (currentUser?.role !== 'Central Admin') return;
     setDaLogoUrl(null);
     setSilagoLogoUrl(null);
     setBagOngSilagoLogoUrl(null);
@@ -1743,9 +1737,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     photoUrl: ''
   });
 
-  // Keep the established Central Admin account usable only until a custom password is saved (hashed in memory & DB).
-  const [adminPasswordCache, setAdminPasswordCache] = useState<string>(() => hashPasswordSync('admin123'));
-
   const updateAdminProfile = (data: Partial<typeof adminProfile>) => {
     if (currentUser?.role !== 'Central Admin') return;
     const updated = { ...adminProfile, ...data };
@@ -1765,17 +1756,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       setCurrentUser(updatedUser);
     }
-  };
-
-  const verifyAdminPassword = (pwd: string): boolean => {
-    return verifyPasswordHash(pwd, adminPasswordCache);
-  };
-
-  const updateAdminPassword = (newPassword: string) => {
-    if (currentUser?.role !== 'Central Admin') return;
-    const hashed = hashPasswordSync(newPassword);
-    setAdminPasswordCache(hashed);
-    supabaseDb.setSetting('silago_admin_password', hashed);
   };
 
   const updateCurrentUserProfile = (data: Partial<User>) => {
@@ -1811,70 +1791,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const updateCurrentUserPassword = (newPassword: string) => {
-    if (!currentUser) return;
-    if (currentUser.role === 'Central Admin') {
-      updateAdminPassword(newPassword);
-    } else {
-      const hashed = hashPasswordSync(newPassword);
-      const matchingAccount = lftAccounts.find((item) => item.username === currentUser.username);
-      if (matchingAccount) {
-        updateLftAccount(matchingAccount.id, { password: hashed });
-      }
-      supabaseDb.setSetting(`silago_lft_password_${currentUser.username.trim().toLowerCase()}`, hashed);
+  const updateCurrentUserPassword = async (currentPassword: string, newPassword: string): Promise<string | null> => {
+    if (!currentUser) return 'Sign in before changing your password.';
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user || user.is_anonymous) return 'Sign in before changing your password.';
+      const credentials = user.email ? { email: user.email } : { phone: user.phone || '' };
+      const { error: verificationError } = await supabase.auth.signInWithPassword({
+        ...credentials,
+        password: currentPassword
+      });
+      if (verificationError) return 'Unable to verify the current password.';
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+        current_password: currentPassword
+      });
+      return error?.message || null;
+    } catch {
+      return 'Unable to change your password. Check your connection and try again.';
     }
-  };
-
-  const verifyCurrentUserPassword = (pwd: string): boolean => {
-    if (!currentUser) return false;
-    if (currentUser.role === 'Central Admin') {
-      return verifyAdminPassword(pwd);
-    } else {
-      const account = lftAccounts.find((item) => item.username === currentUser.username);
-      return verifyPasswordHash(pwd, account?.password);
-    }
-  };
-
-  const resetStaffPassword = (identifier: string, newPassword: string): boolean => {
-    const clean = identifier.trim().toLowerCase();
-    if (!clean || !newPassword || newPassword.length < 6) return false;
-    const cleanDigits = identifier.replace(/\D/g, '');
-    const hashed = hashPasswordSync(newPassword);
-
-    // Check if matches Central Admin
-    const isAdmin =
-      clean === 'admin' ||
-      clean === 'administrator' ||
-      clean === 'mao' ||
-      (adminProfile.email && clean === adminProfile.email.toLowerCase()) ||
-      Boolean(cleanDigits && cleanDigits.length >= 7 && adminProfile.contactNumber && adminProfile.contactNumber.replace(/\D/g, '').endsWith(cleanDigits.slice(-7)));
-
-    if (isAdmin) {
-      setAdminPasswordCache(hashed);
-      supabaseDb.setSetting('silago_admin_password', hashed);
-      return true;
-    }
-
-    // Check if matches LFT account
-    const matchedLft = lftAccounts.find((acc) => {
-      const u = acc.username.toLowerCase();
-      const em = (acc.email || '').toLowerCase();
-      const phoneDigits = acc.contactNumber ? acc.contactNumber.replace(/\D/g, '') : '';
-      return (
-        u === clean ||
-        em === clean ||
-        Boolean(cleanDigits && cleanDigits.length >= 7 && phoneDigits && (phoneDigits === cleanDigits || phoneDigits.endsWith(cleanDigits.slice(-7))))
-      );
-    });
-
-    if (matchedLft) {
-      setLftAccounts((prev) => prev.map((acc) => (acc.id === matchedLft.id ? { ...acc, password: hashed } : acc)));
-      supabaseDb.upsertLftAccount({ ...matchedLft, password: hashed });
-      supabaseDb.setSetting(`silago_lft_password_${matchedLft.username.trim().toLowerCase()}`, hashed);
-      return true;
-    }
-
-    return false;
   };
 
   // SLSU Center Settings
@@ -2290,6 +2225,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addMandateCard = (card: Omit<MandateCardItem, 'id'>) => {
+    if (currentUser?.role !== 'Central Admin') return;
     const newCard: MandateCardItem = {
       ...card,
       id: `mandate-${Date.now()}`
@@ -2308,6 +2244,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateMandateCard = (id: string, updated: Partial<MandateCardItem>) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setLandingPageConfigState((prev) => {
       const updatedCards = prev.mandateCards.map((c) => (c.id === id ? { ...c, ...updated } : c));
       const nextConfig = {
@@ -2323,6 +2260,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteMandateCard = (id: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setLandingPageConfigState((prev) => {
       const updatedCards = prev.mandateCards.filter((c) => c.id !== id);
       const nextConfig = {
@@ -2338,52 +2276,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const setSlsuPhotoUrl = (url: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuPhotoUrlState(url);
     supabaseDb.setSetting('silago_slsu_photo_url', url);
   };
   const setSlsuLayoutMode = (mode: 'banner' | 'full' | 'seal') => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuLayoutModeState(mode);
     supabaseDb.setSetting('silago_slsu_layout_mode', mode);
   };
   const setSlsuCaption = (cap: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuCaptionState(cap);
     supabaseDb.setSetting('silago_slsu_caption', cap);
   };
   const setSlsuSealLogoUrl = (url: string | null) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuSealLogoUrlState(url);
     if (url) supabaseDb.setSetting('silago_slsu_seal_logo_url', url);
     else supabaseDb.removeSetting('silago_slsu_seal_logo_url');
   };
   const setSlsuUniversityName = (name: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuUniversityNameState(name);
     supabaseDb.setSetting('silago_slsu_university_name', name);
   };
   const setSlsuMotto = (motto: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuMottoState(motto);
     supabaseDb.setSetting('silago_slsu_motto', motto);
   };
   const setSlsuYear = (year: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuYearState(year);
     supabaseDb.setSetting('silago_slsu_year', year);
   };
   const setSlsuCenterTitle = (title: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuCenterTitleState(title);
     supabaseDb.setSetting('silago_slsu_center_title', title);
   };
   const setSlsuCenterSubtitle = (sub: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuCenterSubtitleState(sub);
     supabaseDb.setSetting('silago_slsu_center_subtitle', sub);
   };
   const setSlsuBadgeTag = (tag: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuBadgeTagState(tag);
     supabaseDb.setSetting('silago_slsu_badge_tag', tag);
   };
   const setSlsuTopTags = (tags: string) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuTopTagsState(tags);
     supabaseDb.setSetting('silago_slsu_top_tags', tags);
   };
 
   const resetSlsuDetails = () => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSlsuUniversityNameState(SLSU_DEFAULTS.universityName);
     setSlsuMottoState(SLSU_DEFAULTS.motto);
     setSlsuYearState(SLSU_DEFAULTS.year);
@@ -2407,6 +2357,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetAllDefaults = () => {
+    if (currentUser?.role !== 'Central Admin') return;
     setBgPhotoUrlState(DEFAULT_BG_PHOTO);
     setBgOpacityState(0.09);
     setBgBlurState(1);
@@ -2427,6 +2378,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [varieties, setVarieties] = useState<RiceVariety[]>(RICE_VARIETIES);
 
   const saveVarieties = (newVarieties: RiceVariety[]) => {
+    if (currentUser?.role !== 'Central Admin') return;
     const updated = mergeRequiredRiceVarieties(newVarieties);
     setVarieties(updated);
     supabaseDb.setSetting('silago_rice_varieties', updated);
@@ -2451,6 +2403,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [ecosystems, setEcosystems] = useState<string[]>(DEFAULT_ECOSYSTEMS);
 
   const saveEcosystems = (items: string[]) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setEcosystems(items);
     supabaseDb.setSetting('silago_ecosystems', items);
   };
@@ -2475,6 +2428,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [tenures, setTenures] = useState<string[]>(DEFAULT_TENURES);
 
   const saveTenures = (items: string[]) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setTenures(items);
     supabaseDb.setSetting('silago_tenures', items);
   };
@@ -2499,6 +2453,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [seasons, setSeasons] = useState<string[]>(DEFAULT_SEASONS);
 
   const saveSeasons = (items: string[]) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setSeasons(items);
     supabaseDb.setSetting('silago_seasons', items);
   };
@@ -2523,6 +2478,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [irrigationAssociations, setIrrigationAssociations] = useState<string[]>(DEFAULT_IRRIGATION_ASSOCIATIONS);
 
   const saveIrrigationAssociations = (items: string[]) => {
+    if (currentUser?.role !== 'Central Admin') return;
     setIrrigationAssociations(items);
     supabaseDb.setSetting('silago_irrigation_associations', items);
   };
@@ -2563,7 +2519,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           cloudBagongPilipinas,
           cloudPortalBanner,
           cloudAdminProfile,
-          cloudAdminPass,
           cloudOfficeContact,
           cloudVarieties,
           cloudEcosystems,
@@ -2600,7 +2555,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           supabaseDb.getSetting<string>('silago_bagong_pilipinas_logo_url'),
           supabaseDb.getSetting<string>('silago_portal_banner_url'),
           supabaseDb.getSetting<typeof adminProfile>('silago_admin_profile'),
-          supabaseDb.getSetting<string>('silago_admin_password'),
           supabaseDb.getSetting<OfficeContactInfo>('silago_office_contact_info'),
           supabaseDb.getSetting<RiceVariety[]>('silago_rice_varieties'),
           supabaseDb.getSetting<string[]>('silago_ecosystems'),
@@ -2640,7 +2594,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (cloudBagongPilipinas) { setBagongPilipinasLogoUrlState(cloudBagongPilipinas); try { localStorage.setItem('silago_bagong_pilipinas_logo_url', cloudBagongPilipinas); } catch {} }
         if (cloudPortalBanner) { setPortalBannerUrlState(cloudPortalBanner); try { localStorage.setItem('silago_portal_banner_url', cloudPortalBanner); } catch {} }
         if (cloudAdminProfile) setAdminProfile(cloudAdminProfile);
-        if (cloudAdminPass) setAdminPasswordCache(cloudAdminPass);
         if (cloudOfficeContact) setOfficeContactInfoState(cloudOfficeContact);
         if (Array.isArray(cloudVarieties) && cloudVarieties.length > 0) setVarieties(mergeRequiredRiceVarieties(cloudVarieties));
         if (Array.isArray(cloudEcosystems) && cloudEcosystems.length > 0) setEcosystems(cloudEcosystems);
@@ -2717,11 +2670,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider
       value={{
         currentUser,
+        barangayProfiles,
+        updateBarangayProfile,
         setCurrentUser,
         updateCurrentUserProfile,
         updateCurrentUserPassword,
-        verifyCurrentUserPassword,
-        resetStaffPassword,
         parcels,
         addParcel,
         updateParcel,
@@ -2768,8 +2721,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resetLogos,
         adminProfile,
         updateAdminProfile,
-        verifyAdminPassword,
-        updateAdminPassword,
         slsuPhotoUrl,
         setSlsuPhotoUrl,
         slsuLayoutMode,

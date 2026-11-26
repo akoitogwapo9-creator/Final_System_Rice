@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useApp } from '../context/AppContext';
-import { BARANGAYS, matchBarangay } from '../data/barangays';
+import { BARANGAYS, getBarangayLabel, getBarangayZone, matchBarangay } from '../data/barangays';
 import { DECREE_CATEGORIES, LegalDecree } from '../data/legalDecrees';
 import { findSilagoBarangayFeature } from '../data/silagoGeoJson';
 import { findBarangayBoundary } from '../data/barangayBoundaries';
@@ -461,7 +461,7 @@ function InlineBarangaySurveyMap({ barangay, points, onPointsChange, center, onC
 }
 
 export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (tab: PortalTab) => void; onMeasureBarangay: (barangay: Barangay) => void }) {
-  const { lftAccounts, parcels, permissions } = useApp();
+  const { lftAccounts, parcels, permissions, barangayProfiles } = useApp();
   if (!permissions.isCentralAdmin) {
     return (
       <div className="mx-auto max-w-xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-900">
@@ -519,7 +519,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
     });
   }, [lftAccounts, parcels, savedSettingsState, savedPointsState]);
 
-  const filteredRows = rows.filter((row) => `${row.name} ${row.focalPerson} ${row.terrain}`.toLowerCase().includes(query.toLowerCase()));
+  const filteredRows = rows.filter((row) => `${getBarangayLabel(row.name, barangayProfiles)} ${row.focalPerson} ${row.terrain}`.toLowerCase().includes(query.toLowerCase()));
 
   // Active barangay for top GIS surveyor map
   const [activeBarangay, setActiveBarangay] = useState<Barangay>(BARANGAYS[0]);
@@ -561,6 +561,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   };
 
   const handleSaveBoundary = () => {
+    if (!permissions.isCentralAdmin) return;
     try {
       const allPoints = getSavedPoints();
       allPoints[activeBarangay.name] = points;
@@ -597,6 +598,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   };
 
   const handleDeleteBoundary = (b: Barangay) => {
+    if (!permissions.isCentralAdmin) return;
     if (window.confirm(`Reset boundary for ${b.name} to official default?`)) {
       const allPoints = getSavedPoints();
       delete allPoints[b.name];
@@ -619,6 +621,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   const [editingBarangayModal, setEditingBarangayModal] = useState<Barangay | null>(null);
 
   const handleUpdateBarangay = (name: string, updates: Partial<Barangay>) => {
+    if (!permissions.isCentralAdmin) return;
     try {
       const allSettings = getSavedSettings();
       allSettings[name] = {
@@ -778,11 +781,11 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
               {filteredRows.map((b) => (
                 <tr key={b.name} className="transition hover:bg-slate-50/80">
                   <td className="px-4 py-3.5 font-semibold text-slate-900">
-                    Brgy. {b.name}
+                    Brgy. {getBarangayLabel(b.name, barangayProfiles)}
                   </td>
                   <td className="px-4 py-3.5">
                     <span className="inline-flex rounded-full bg-[#ecfdf5] border border-emerald-200/80 text-[#15803d] text-[10px] font-bold px-2.5 py-0.5">
-                      GREEN ZONE
+                      {getBarangayZone(b.name, barangayProfiles)}
                     </span>
                   </td>
                   <td className="px-4 py-3.5">
@@ -873,7 +876,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
 }
 
 export function AccountProfileView({ onSignOut }: { onSignOut: () => void }) {
-  const { currentUser, updateCurrentUserProfile, updateCurrentUserPassword, verifyCurrentUserPassword } = useApp();
+  const { currentUser, updateCurrentUserProfile, updateCurrentUserPassword } = useApp();
   const [name, setName] = useState(currentUser?.name || 'Admin');
   const [phone, setPhone] = useState(currentUser?.contactNumber || '');
   const [current, setCurrent] = useState('');
@@ -887,16 +890,16 @@ export function AccountProfileView({ onSignOut }: { onSignOut: () => void }) {
     setTimeout(() => setNotice(''), 4000);
   };
 
-  const password = () => {
-    if (!verifyCurrentUserPassword(current)) {
-      setNotice('Current password did not match.');
-      return;
-    }
+  const password = async () => {
     if (next.length < 6 || next !== confirm) {
       setNotice('Use at least 6 characters and confirm the new password.');
       return;
     }
-    updateCurrentUserPassword(next);
+    const passwordError = await updateCurrentUserPassword(current, next);
+    if (passwordError) {
+      setNotice(passwordError);
+      return;
+    }
     setCurrent('');
     setNext('');
     setConfirm('');

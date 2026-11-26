@@ -8,6 +8,16 @@ export { memoryAuthStorage };
 // Shared official Supabase JS client instance (session-scoped auth storage)
 export const supabaseClient: SupabaseClient = sharedSupabaseClient;
 
+// PostgREST and Storage independently enforce access through database grants and RLS.
+export async function hasSupabaseWriteSession(): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+    return !error && Boolean(data.session?.user && !data.session.user.is_anonymous);
+  } catch {
+    return false;
+  }
+}
+
 // Realtime Channel Name
 export const REALTIME_FARM_CHANNEL = 'db-changes';
 
@@ -104,10 +114,10 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
 
   const parsed = parseFarmerName(farmerName);
 
-  const farmerFamilyName = (row.farmer_family_name || row.farmerFamilyName || row.family_name || parsed.family || '').trim();
-  const farmerGivenName = (row.farmer_given_name || row.farmerGivenName || row.given_name || parsed.given || '').trim();
-  const farmerMiddleName = (row.farmer_middle_name || row.farmerMiddleName || row.middle_name || parsed.middle || '').trim();
-  const farmerSuffix = String(row.farmer_suffix ?? row.farmerSuffix ?? row.suffix ?? parsed.suffix ?? '').trim();
+  const farmerFamilyName = (row.farmer_family_name || row.farmerFamilyName || row.family_name || parsed.family || '').trim().toUpperCase();
+  const farmerGivenName = (row.farmer_given_name || row.farmerGivenName || row.given_name || parsed.given || '').trim().toUpperCase();
+  const farmerMiddleName = (row.farmer_middle_name || row.farmerMiddleName || row.middle_name || parsed.middle || '').trim().toUpperCase();
+  const farmerSuffix = String(row.farmer_suffix ?? row.farmerSuffix ?? row.suffix ?? parsed.suffix ?? '').trim().toUpperCase();
   const displayName = parsed.suffix
     ? `${farmerFamilyName}, ${[farmerGivenName, farmerMiddleName, farmerSuffix].filter(Boolean).join(' ')}`
     : farmerName;
@@ -154,7 +164,7 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     tagNumber,
     swineNameOrId: rsbsaNo || 'NO RSBSA',
     rsbsa_no: rsbsaNo || 'NO RSBSA',
-    raiserName: displayName || 'UNKNOWN FARMER',
+    raiserName: displayName.toUpperCase() || 'UNKNOWN FARMER',
     farmerFamilyName,
     farmerGivenName,
     farmerMiddleName,
@@ -539,6 +549,7 @@ export const supabaseStorage = {
    * and return the persistent public URL.
    */
   async uploadFarmPhoto(file: File, recordId: string = 'parcel'): Promise<string> {
+    if (!await hasSupabaseWriteSession()) return '';
     try {
       const fileExt = file.name ? file.name.split('.').pop() || 'jpg' : 'jpg';
       const cleanRecordId = recordId.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -611,7 +622,7 @@ export function getOfflinePendingFarms(): FarmParcel[] {
   }
 }
 
-export function saveOfflinePendingFarm(parcel: FarmParcel): void {
+function saveOfflinePendingFarm(parcel: FarmParcel): void {
   if (typeof window === 'undefined') return;
   try {
     const current = getOfflinePendingFarms().filter(
@@ -631,7 +642,7 @@ export function saveOfflinePendingFarm(parcel: FarmParcel): void {
   }
 }
 
-export function removeOfflinePendingFarm(tagOrRsbsa: string): void {
+function removeOfflinePendingFarm(tagOrRsbsa: string): void {
   if (typeof window === 'undefined') return;
   try {
     const current = getOfflinePendingFarms();
@@ -794,6 +805,7 @@ export async function syncOfflinePendingFarms(): Promise<{
   conflictCount: number;
   conflicts: FarmParcel[];
 }> {
+  if (!await hasSupabaseWriteSession()) return { syncedCount: 0, conflictCount: 0, conflicts: [] };
   const queue = getOfflinePendingFarms();
   if (queue.length === 0) return { syncedCount: 0, conflictCount: 0, conflicts: [] };
 
@@ -879,14 +891,14 @@ export async function syncOfflinePendingFarms(): Promise<{
 
 function formatFarmerNameForStorage(parcel: FarmParcel): string {
   const fam = (parcel.farmerFamilyName || '').trim().toUpperCase();
-  const giv = (parcel.farmerGivenName || '').trim();
-  const mid = (parcel.farmerMiddleName || '').trim();
-  const suffix = (parcel.farmerSuffix || '').replace(/,/g, '').trim();
+  const giv = (parcel.farmerGivenName || '').trim().toUpperCase();
+  const mid = (parcel.farmerMiddleName || '').trim().toUpperCase();
+  const suffix = (parcel.farmerSuffix || '').replace(/,/g, '').trim().toUpperCase();
 
   // Store suffixed names as four parts so multiword given and middle names round-trip.
   if (suffix) return [fam, giv, mid, suffix].join(', ');
   if (fam && giv) return `${fam}, ${[giv, mid].filter(Boolean).join(' ')}`;
-  return parcel.raiserName?.trim() || [fam, giv, mid].filter(Boolean).join(' ') || 'Registered Farmer';
+  return parcel.raiserName?.trim().toUpperCase() || [fam, giv, mid].filter(Boolean).join(' ') || 'Registered Farmer';
 }
 
 /**
@@ -1147,6 +1159,7 @@ export const supabaseDb = {
    * Insert a new farm record directly to Supabase 'farmers' table with offline queue fallback
    */
   async insertFarmRecord(parcel: FarmParcel): Promise<boolean> {
+    if (!await hasSupabaseWriteSession()) return false;
     const norm = mapFarmerRowToParcel(parcel);
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
 
@@ -1229,6 +1242,7 @@ export const supabaseDb = {
    * Update an existing farm record in Supabase 'farmers' table and broadcast real-time sync event
    */
   async updateFarmRecord(tagNumber: string, updatedFields: Partial<FarmParcel>): Promise<void> {
+    if (!await hasSupabaseWriteSession()) return;
     try {
       const merged = mapFarmerRowToParcel({
         ...updatedFields,
@@ -1275,6 +1289,7 @@ export const supabaseDb = {
    * Delete a farm record from Supabase 'farmers' table and broadcast real-time sync event
    */
   async deleteFarmRecord(tagNumber: string): Promise<void> {
+    if (!await hasSupabaseWriteSession()) return;
     try {
       removeOfflinePendingFarm(tagNumber);
 
@@ -1298,6 +1313,7 @@ export const supabaseDb = {
    * Bulk delete farm records from Supabase 'farmers' table and broadcast real-time sync event
    */
   async deleteBulkFarmRecords(tagNumbers: string[]): Promise<boolean> {
+    if (!await hasSupabaseWriteSession()) return false;
     if (!tagNumbers || tagNumbers.length === 0) return true;
     try {
       tagNumbers.forEach((tag) => removeOfflinePendingFarm(tag));
@@ -1337,6 +1353,7 @@ export const supabaseDb = {
    * Bulk sync parcels to Supabase
    */
   async syncParcels(parcels: FarmParcel[]): Promise<void> {
+    if (!await hasSupabaseWriteSession()) return;
     try {
       const payloads = parcels.map(sanitizeFarmerPayload);
       await supabaseClient.from('farmers').upsert(payloads, { onConflict: 'id' });
@@ -1399,6 +1416,7 @@ export const supabaseDb = {
    * Upsert an LFT account
    */
   async upsertLftAccount(account: LftAccount): Promise<void> {
+    if (!await hasSupabaseWriteSession()) return;
     const norm = normalizeLftAccount(account);
     const payload = sanitizeLftPayload(norm);
 
@@ -1419,6 +1437,7 @@ export const supabaseDb = {
    * Delete an LFT account
    */
   async deleteLftAccount(id: string): Promise<void> {
+    if (!await hasSupabaseWriteSession()) return;
     try {
       const { error } = await supabaseClient.from('lft_technicians').delete().eq('id', id);
       if (error) {
@@ -1528,12 +1547,15 @@ export const supabaseDb = {
   /**
    * Upsert a setting/configuration document to Supabase and broadcast realtime update
    */
-  async setSetting<T>(key: string, value: T): Promise<void> {
+  async setSetting<T>(key: string, value: T): Promise<boolean> {
+    if (!await hasSupabaseWriteSession()) return false;
+    let saved = false;
     const payload = { key, value, updated_at: new Date().toISOString() };
     if (isSystemSettingsAvailable) {
       try {
         const { error } = await supabaseClient.from('system_settings').upsert(payload, { onConflict: 'key' });
-        if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        if (!error) saved = true;
+        else if (error.code === '42P01' || error.message?.includes('does not exist')) {
           isSystemSettingsAvailable = false;
         }
       } catch {
@@ -1543,7 +1565,8 @@ export const supabaseDb = {
     if (isAppSettingsAvailable) {
       try {
         const { error } = await supabaseClient.from('app_settings').upsert(payload, { onConflict: 'key' });
-        if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        if (!error) saved = true;
+        else if (error.code === '42P01' || error.message?.includes('does not exist')) {
           isAppSettingsAvailable = false;
         }
       } catch {
@@ -1551,13 +1574,15 @@ export const supabaseDb = {
       }
     }
 
-    await broadcastRealtimeChange('setting_update' as any, { key, value });
+    if (saved) await broadcastRealtimeChange('setting_update' as any, { key, value });
+    return saved;
   },
 
   /**
    * Remove a setting from Supabase
    */
   async removeSetting(key: string): Promise<void> {
+    if (!await hasSupabaseWriteSession()) return;
     if (isSystemSettingsAvailable) {
       try {
         await supabaseClient.from('system_settings').delete().eq('key', key);

@@ -5,7 +5,6 @@ import { OfficialSealsTrio } from './Seals';
 import { supabase } from '../supabase';
 import { supabaseDb } from '../utils/supabaseClient';
 import {
-  verifyPasswordHash,
   getLoginLockoutRemainingSec,
   recordLoginFailure,
   resetLoginRateLimit
@@ -37,10 +36,8 @@ interface LoginModalProps {
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const {
     setCurrentUser,
-    verifyAdminPassword,
     adminProfile,
-    lftAccounts,
-    resetStaffPassword
+    lftAccounts
   } = useApp();
 
   // Modal navigation mode:
@@ -215,115 +212,40 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
       return;
     }
 
-    // On cold boot or right after remote updates, ensure latest credentials are checked before rejecting
-    if (!isAdmin && (!matchedLft || !(matchedLft as any).password)) {
-      setIsSubmittingLogin(true);
-      try {
-        const freshLfts = await supabaseDb.getLftAccounts();
-        const freshMatch = findMatchingLftAccount(cleanUser, freshLfts);
-        if (freshMatch) {
-          matchedLft = freshMatch;
-        }
-        if (matchedLft && !(matchedLft as any).password) {
-          const fallbackHash = await supabaseDb.getSetting<string>(
-            `silago_lft_password_${matchedLft.username.trim().toLowerCase()}`
-          );
-          if (fallbackHash) {
-            matchedLft = { ...matchedLft, password: fallbackHash };
-          }
-        }
-      } catch (err) {
-        console.warn('LFT login hydration notice:', err);
-      } finally {
-        setIsSubmittingLogin(false);
+    setIsSubmittingLogin(true);
+    setError('');
+    try {
+      if (!isAdmin && !matchedLft && !cleanUser.includes('@')) {
+        matchedLft = findMatchingLftAccount(cleanUser, await supabaseDb.getLftAccounts());
       }
-    }
-
-    if (!isAdmin && !matchedLft) {
-      const wait = recordLoginFailure();
-      setError(wait > 0 ? `Too many failed attempts. Locked for ${wait}s.` : 'Invalid username or password. Please try again.');
-      return;
-    }
-
-    // Central Admin Authentication
-    if (isAdmin) {
-      let isAdminPwdValid = verifyAdminPassword(password);
-      if (!isAdminPwdValid || password === 'admin123') {
-        setIsSubmittingLogin(true);
-        try {
-          const cloudAdminPass = await supabaseDb.getSetting<string>('silago_admin_password');
-          if (cloudAdminPass) {
-            isAdminPwdValid = verifyPasswordHash(password, cloudAdminPass);
-          }
-        } catch (err) {
-          console.warn('Admin login hydration notice:', err);
-        } finally {
-          setIsSubmittingLogin(false);
-        }
+      if (matchedLft && !isAccountActive(matchedLft.status)) {
+        setError('Account inactive. Contact the Central Admin.');
+        return;
       }
-      if (!isAdminPwdValid) {
+
+      const email = cleanUser.includes('@')
+        ? cleanUser.toLowerCase()
+        : isAdmin ? adminProfile.email : matchedLft?.email;
+      if (!email?.trim()) {
+        setError('Sign in using the email address registered with your account.');
+        return;
+      }
+
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password
+      });
+      if (signInError) {
         const wait = recordLoginFailure();
-        setError(wait > 0 ? `Too many failed attempts. Locked for ${wait}s.` : 'Invalid username or password. Please try again.');
+        setError(wait > 0 ? `Too many failed attempts. Locked for ${wait}s.` : 'Invalid email or password.');
         return;
       }
-
       resetLoginRateLimit();
-      const adminUser: User = {
-        username: 'admin',
-        role: 'Central Admin',
-        name: adminProfile.name || 'Central Admin',
-        title: adminProfile.title || 'Municipal Agriculture Administrator',
-        email: adminProfile.email || 'admin@silago.gov.ph',
-        contactNumber: adminProfile.contactNumber || '',
-        office: adminProfile.office || 'Silago Municipal Agriculture Office (DA-MAO)',
-        photoUrl: adminProfile.photoUrl || ''
-      };
-
-      setCurrentUser(adminUser);
-      onClose();
-      onSuccess?.(adminUser);
-      return;
-    }
-
-    // LFT Field Officer Authentication
-    if (matchedLft) {
-      if (!isAccountActive(matchedLft.status)) {
-        setError(
-          'Account Inactive: Your account has been disabled or is pending activation by Central Admin.'
-        );
-        return;
-      }
-
-      const validPassword = (matchedLft as any).password;
-      if (!verifyPasswordHash(password, validPassword)) {
-        const wait = recordLoginFailure();
-        setError(wait > 0 ? `Too many failed attempts. Locked for ${wait}s.` : 'Invalid username or password. Please try again.');
-        return;
-      }
-
-      resetLoginRateLimit();
-
-      const assignedBrgys =
-        matchedLft.assignedBarangays && matchedLft.assignedBarangays.length > 0
-          ? matchedLft.assignedBarangays
-          : matchedLft.barangay.split(',').map((s) => s.trim()).filter(Boolean);
-
-      const lftUser: User = {
-        username: matchedLft.username,
-        role: 'Barangay Focal Person',
-        name: matchedLft.name,
-        barangay: matchedLft.barangay,
-        assignedBarangays: assignedBrgys,
-        title: 'Local Farmer Technician (LFT)',
-        contactNumber: matchedLft.contactNumber,
-        email: matchedLft.email || `${matchedLft.username}@silago-agriculture.gov.ph`,
-        photoUrl: matchedLft.photoUrl
-      };
-
-      setCurrentUser(lftUser);
-      onClose();
-      onSuccess?.(lftUser);
-      return;
+      // The app resolves the authenticated session and role before opening the workspace.
+    } catch {
+      setError('Unable to sign in. Check your connection and try again.');
+    } finally {
+      setIsSubmittingLogin(false);
     }
   };
 
@@ -733,9 +655,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
         setError(updateErr.message);
         return;
       }
-
-      // 2. Synchronize to official system credentials store
-      resetStaffPassword(verifiedIdentifier, newPassword);
 
       setIsSubmittingReset(false);
       setAuthMode('password_reset_success');

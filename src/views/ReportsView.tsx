@@ -85,7 +85,7 @@ const parseFarmerName = (parcel: FarmParcel) => {
   if (parcel.farmerFamilyName && parcel.farmerGivenName) {
     return {
       family: parcel.farmerFamilyName.trim().toUpperCase(),
-      given: [parcel.farmerGivenName.trim().toUpperCase(), parcel.farmerSuffix?.trim()].filter(Boolean).join(' '),
+      given: [parcel.farmerGivenName.trim().toUpperCase(), parcel.farmerSuffix?.trim().toUpperCase()].filter(Boolean).join(' '),
       middle: (parcel.farmerMiddleName || '').trim().toUpperCase()
     };
   }
@@ -195,11 +195,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   );
 
   const handleSaveIrrigatorsData = (updated: IrrigatorsDirectoryLetterData) => {
+    if (!currentUser) return;
     setIrrigatorsData(updated);
     saveIrrigatorsLetterData(updated);
   };
 
   const handleSaveMpcsrsData = (updated: MpcsrsReportData) => {
+    if (!currentUser) return;
     setMpcsrsData(updated);
     saveMpcsrsReportData(updated);
   };
@@ -580,11 +582,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
 
   // Handlers for Letter Management
   const handleOpenAddLetter = () => {
+    if (!currentUser) return;
     setEditingLetter(null);
     setIsLetterModalOpen(true);
   };
 
   const handleOpenEditLetter = () => {
+    if (!currentUser) return;
     // If on registry table only, switch to letter view so user can edit directly
     if (documentView === 'registry_table') {
       setDocumentView('letter');
@@ -598,6 +602,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   };
 
   const handleDeleteLetter = () => {
+    if (!currentUser) return;
     if (letters.length <= 1) {
       alert('At least one official letter template must be maintained.');
       return;
@@ -611,6 +616,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   };
 
   const handleSaveLetter = (saved: OfficialReportLetter) => {
+    if (!currentUser) return;
     const exists = letters.some((l) => l.id === saved.id);
     let updated: OfficialReportLetter[];
     if (exists) {
@@ -670,6 +676,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   };
 
   const handleOpenTableEditor = () => {
+    if (!currentUser) return;
     if (!customTableData) {
       setCustomTableData(buildInitialTableData(reportParcels, visibleColumns));
     }
@@ -677,6 +684,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   };
 
   const handlePrint = () => {
+    if (!currentUser) return;
     const printContent = document.getElementById('printable-report-canvas') || document.getElementById('official-print-document') || document.getElementById('printable-area');
     const isLandscape = orientation === 'landscape';
     const originalTitle = document.title;
@@ -855,6 +863,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   };
 
   const handleExportCSV = () => {
+    if (!currentUser) return;
     let headers: string[] = [];
     let rows: (string | number)[][] = [];
 
@@ -1058,6 +1067,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   };
 
   const handleExportExcel = () => {
+    if (!currentUser) return;
     if (documentView === 'complete_package') {
       exportCompletePackageExcel(
         reportParcels,
@@ -1094,6 +1104,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   };
 
   const handleExportWord = async () => {
+    if (!currentUser) return;
     try {
       setIsExportingWord(true);
       if (documentView === 'complete_package') {
@@ -1545,7 +1556,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
       </div>
 
       {/* Screen-Only Edit Notification Banner when in Direct In-Line Edit Mode */}
-      {isDirectEditingLetter && (
+      {currentUser && isDirectEditingLetter && (
         <div className="no-print bg-amber-500/10 border border-amber-400 text-amber-950 px-4 py-2.5 rounded-2xl flex items-center justify-between shadow-xs animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center gap-2 text-xs">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
@@ -1598,7 +1609,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                       predominantVarieties={predominantVarieties}
                       assignedLftName={assignedLft.name}
                       onUpdateLetter={handleSaveLetter}
-                      isEditable={isDirectEditingLetter}
+                      isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
                       pageNumber={docPageNum}
                       totalPages={letterTotalPages}
@@ -1621,7 +1632,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                     <OfficialIrrigatorsDirectoryDocument
                       data={irrigatorsData}
                       onUpdateData={handleSaveIrrigatorsData}
-                      isEditable={isDirectEditingLetter}
+                      isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
                       pageNumber={docPageNum}
                       totalPages={irrigatorsTotalPages}
@@ -1644,7 +1655,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                     <MpcsrsPalayReportDocument
                       data={mpcsrsData}
                       onUpdateData={handleSaveMpcsrsData}
-                      isEditable={isDirectEditingLetter}
+                      isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
                       pageNumber={docPageNum}
                       totalPages={mpcsrsTotalPages}
@@ -1682,7 +1693,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                       reviewedTitle={currentLetter.reviewedTitle || reviewedTitle}
                       approvedBy={currentLetter.approvedBy || approvedBy}
                       approvedTitle={currentLetter.approvedTitle || approvedTitle}
-                      isEditable={isDirectEditingLetter}
+                      isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
                       pageNumber={globalPageNum}
                       totalPages={totalDocumentPages}
@@ -1712,7 +1723,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                       predominantVarieties={predominantVarieties}
                       assignedLftName={assignedLft.name}
                       onUpdateLetter={handleSaveLetter}
-                      isEditable={isDirectEditingLetter}
+                      isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
                       pageNumber={pageNum}
                       totalPages={letterTotalPages}
@@ -1735,7 +1746,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                     <OfficialIrrigatorsDirectoryDocument
                       data={irrigatorsData}
                       onUpdateData={handleSaveIrrigatorsData}
-                      isEditable={isDirectEditingLetter}
+                      isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
                       pageNumber={pageNum}
                       totalPages={irrigatorsTotalPages}
@@ -1758,7 +1769,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                     <MpcsrsPalayReportDocument
                       data={mpcsrsData}
                       onUpdateData={handleSaveMpcsrsData}
-                      isEditable={isDirectEditingLetter}
+                      isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
                       pageNumber={pageNum}
                       totalPages={mpcsrsTotalPages}
@@ -1798,7 +1809,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                       reviewedTitle={currentLetter.reviewedTitle || reviewedTitle}
                       approvedBy={currentLetter.approvedBy || approvedBy}
                       approvedTitle={currentLetter.approvedTitle || approvedTitle}
-                      isEditable={isDirectEditingLetter}
+                      isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
                       pageNumber={pageNum}
                       totalPages={registryPageChunks.length}
@@ -2250,7 +2261,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
         </div>
 
         {/* Print Button */}
-        <button
+        {currentUser && <button
           type="button"
           onClick={handlePrint}
           className="ml-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center gap-1.5 shadow-sm transition hover:scale-105 active:scale-95 cursor-pointer"
@@ -2258,11 +2269,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
         >
           <Printer className="w-3.5 h-3.5" />
           <span>Print</span>
-        </button>
+        </button>}
       </div>
 
       {/* Floating Quick Action Dock (Right-Hand Fixed Action Center) */}
-      <FloatingReportActionDock
+      {currentUser && <FloatingReportActionDock
         onPrint={handlePrint}
         onExportWord={handleExportWord}
         onExportExcel={handleExportExcel}
@@ -2270,14 +2281,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
         onToggleDirectEdit={() => setIsDirectEditingLetter(!isDirectEditingLetter)}
         documentView={documentView}
         isExportingWord={isExportingWord}
-      />
+      />}
 
       {/* Document Parameters Modal for Signatories, Dates, Control Numbers & Layout */}
       <DocumentParametersModal
-        isOpen={isParamsModalOpen}
+        isOpen={Boolean(currentUser) && isParamsModalOpen}
         onClose={() => setIsParamsModalOpen(false)}
         signatories={getActiveSignatories()}
         onUpdateSignatories={(sigs) => {
+          if (!currentUser) return;
           setPersistedSignatories(sigs);
           supabaseDb.setSetting('silago_registry_table_signatories', sigs);
           if (sigs.length >= 1) {
@@ -2348,7 +2360,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
 
       {/* Letter Editor Modal for Adding / Editing Official Letters */}
       <LetterEditorModal
-        isOpen={isLetterModalOpen}
+        isOpen={Boolean(currentUser) && isLetterModalOpen}
         onClose={() => setIsLetterModalOpen(false)}
         onSave={handleSaveLetter}
         initialLetter={editingLetter}
@@ -2359,7 +2371,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
       />
 
       {/* Table Editor Modal for Live Interactive Table Cell/Row/Column Editing */}
-      {isTableModalOpen && (
+      {currentUser && isTableModalOpen && (
         <TableEditorModal
           isOpen={isTableModalOpen}
           onClose={() => setIsTableModalOpen(false)}
@@ -2390,7 +2402,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
 
       {/* Seasonal Report Logo Editor Modal */}
       <ReportLogoEditorModal
-        isOpen={editingSeasonalLogo !== null}
+        isOpen={Boolean(currentUser) && editingSeasonalLogo !== null}
         onClose={() => setEditingSeasonalLogo(null)}
         logoType={editingSeasonalLogo}
       />

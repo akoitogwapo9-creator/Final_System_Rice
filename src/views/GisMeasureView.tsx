@@ -46,7 +46,7 @@ function featureRing(name: string): Point[] {
 }
 
 export const GisMeasureView: React.FC<GisMeasureViewProps> = ({ barangay, onSaveAndReturn }) => {
-  const { lftAccounts } = useApp();
+  const { lftAccounts, permissions } = useApp();
   const assignedOfficer = lftAccounts.find(account =>
     (account.assignedBarangays || []).some(name => matchBarangay(name, barangay.name)) || matchBarangay(account.barangay, barangay.name)
   );
@@ -203,6 +203,7 @@ export const GisMeasureView: React.FC<GisMeasureViewProps> = ({ barangay, onSave
     }, (error) => setNotice(`Unable to get GPS location: ${error.message}`), { enableHighAccuracy: true, timeout: 8000 });
   };
   const saveBarangayBoundary = () => {
+    if (!permissions.isCentralAdmin) return;
     try {
       const allPoints = JSON.parse(localStorage.getItem('silago_gis_measure_points') || '{}');
       allPoints[barangay.name] = points;

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { BARANGAYS } from '../data/barangays';
+import { BARANGAYS, getBarangayLabel, getBarangayZone } from '../data/barangays';
 import { DECREE_CATEGORIES, LegalDecree } from '../data/legalDecrees';
 import { Barangay, FarmParcel, PortalTab } from '../types';
 import { SilagoSeal, BagOngSilagoLogo, OfficialSealsTrio } from './Seals';
@@ -88,6 +88,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 }) => {
   const {
     currentUser,
+    barangayProfiles,
     parcels,
     language,
     setLanguage,
@@ -166,6 +167,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   }, [savedSettings]);
 
   const handleUpdateBarangay = (name: string, updates: Partial<Barangay>) => {
+    if (!permissions.isCentralAdmin) return;
     setSavedSettings((prev) => ({
       ...prev,
       [name]: {
@@ -189,13 +191,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   const filteredBarangays = useMemo(() => {
     if (barangayFilter === 'COASTAL') {
-      return liveBarangays.filter((b) => b.terrain.toLowerCase().includes('coastal'));
+      return liveBarangays.filter((b) => getBarangayZone(b.name, barangayProfiles) === 'Coastal');
     }
     if (barangayFilter === 'INLAND') {
-      return liveBarangays.filter((b) => !b.terrain.toLowerCase().includes('coastal'));
+      return liveBarangays.filter((b) => getBarangayZone(b.name, barangayProfiles) === 'Upland');
     }
     return liveBarangays;
-  }, [barangayFilter, liveBarangays]);
+  }, [barangayFilter, liveBarangays, barangayProfiles]);
 
   // Scroll to section helper
   const scrollToSection = (id: string) => {
@@ -762,7 +764,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 {/* Top: Name & Dynamic Ecosystem Status Dot */}
                 <div className="flex items-start justify-between gap-2">
                   <h4 className="font-semibold text-xs sm:text-sm text-gov-ink group-hover:text-gov-green transition">
-                    {b.name.startsWith('Poblacion') ? b.name : b.name}
+                    {getBarangayLabel(b.name, barangayProfiles)}
                   </h4>
                   <span className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1 transition-all ${ecoStyle.dotClass}`} />
                 </div>
@@ -1083,12 +1085,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         parcels={parcels}
         onClose={() => setSelectedBarangayModal(null)}
         onSelectParcel={(p) => setSelectedParcelModal(p)}
-        onViewOnMap={currentUser ? (b) => {
+        onViewOnMap={(b) => {
           if (onSelectBarangayForMap) onSelectBarangayForMap(b);
           onNavigateToPortalTab('map');
-        } : undefined}
+        }}
         onUpdateBarangay={handleUpdateBarangay}
-        canEdit={true}
+        canEdit={permissions.isCentralAdmin}
       />
 
       {selectedParcelModal && (

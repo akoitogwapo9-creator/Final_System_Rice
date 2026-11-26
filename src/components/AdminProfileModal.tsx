@@ -23,7 +23,7 @@ interface AdminProfileModalProps {
 }
 
 export const AdminProfileModal: React.FC<AdminProfileModalProps> = ({ isOpen, onClose }) => {
-  const { adminProfile, updateAdminProfile, verifyAdminPassword, updateAdminPassword } = useApp();
+  const { adminProfile, updateAdminProfile, updateCurrentUserPassword } = useApp();
 
   const [activeTab, setActiveTab] = useState<'profile' | 'security'>('profile');
 
@@ -93,7 +93,7 @@ export const AdminProfileModal: React.FC<AdminProfileModalProps> = ({ isOpen, on
     setTimeout(() => setSuccess(null), 3000);
   };
 
-  const handleSavePassword = (e: React.FormEvent) => {
+  const handleSavePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
@@ -103,10 +103,6 @@ export const AdminProfileModal: React.FC<AdminProfileModalProps> = ({ isOpen, on
       return;
     }
 
-    if (!verifyAdminPassword(currentPassword)) {
-      setError('Current password is incorrect');
-      return;
-    }
 
     if (newPassword.length < 6) {
       setError('New password must be at least 6 characters long');
@@ -118,7 +114,11 @@ export const AdminProfileModal: React.FC<AdminProfileModalProps> = ({ isOpen, on
       return;
     }
 
-    updateAdminPassword(newPassword);
+    const passwordError = await updateCurrentUserPassword(currentPassword, newPassword);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
