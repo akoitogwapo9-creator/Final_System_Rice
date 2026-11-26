@@ -1,3 +1,4 @@
+import { useImperativeHandle } from 'react';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { PRESET_BACKGROUNDS, SLSU_EXTENSION_PRESETS, DEFAULT_BG_PHOTO, DEFAULT_SLSU_PHOTO, SLSU_DEFAULTS } from '../data/photos';
@@ -26,7 +27,9 @@ import {
   Maximize2
 } from 'lucide-react';
 
-export const PhotosView: React.FC<{ initialTab?: 'all' | 'background' | 'slsu' | 'seals' }> = ({ initialTab = 'all' }) => {
+export interface MediaSettingsActions { save: () => void; reset: () => void }
+
+export const PhotosView: React.FC<{ initialTab?: 'all' | 'background' | 'slsu' | 'seals'; actionsRef?: React.Ref<MediaSettingsActions> }> = ({ initialTab = 'all', actionsRef }) => {
   const {
     bgPhotoUrl,
     bgOpacity,
@@ -299,6 +302,25 @@ export const PhotosView: React.FC<{ initialTab?: 'all' | 'background' | 'slsu' |
     showToast('All media settings saved & applied to the live system!');
   };
 
+  const stageMediaDefaults = () => {
+    setDraftBgUrl(DEFAULT_BG_PHOTO);
+    setDraftBgOpacity(9);
+    setDraftBgBlur(1);
+    setDraftBgActive(false);
+    setDraftDaLogoUrl('');
+    setDraftSilagoLogoUrl('');
+    setDraftBagOngLogoUrl('');
+    setDraftSlsuUrl(DEFAULT_SLSU_PHOTO);
+    setDraftSlsuTitle(SLSU_DEFAULTS.centerTitle);
+    setDraftSlsuSubtitle(SLSU_DEFAULTS.centerSubtitle);
+    setDraftSlsuCaption(SLSU_DEFAULTS.caption);
+    setDraftSlsuMotto(SLSU_DEFAULTS.motto);
+    setDraftHeroBg({ ...HERO_BG_DEFAULTS });
+    showToast('Default media values staged. Save & Apply to publish them.');
+  };
+
+  useImperativeHandle(actionsRef, () => ({ save: handleSaveAndApply, reset: stageMediaDefaults }));
+
   // Discard Draft Changes
   const handleDiscardChanges = () => {
     setDraftBgUrl(bgPhotoUrl);
@@ -419,22 +441,7 @@ export const PhotosView: React.FC<{ initialTab?: 'all' | 'background' | 'slsu' |
           <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              onClick={() => {
-                setDraftBgUrl(DEFAULT_BG_PHOTO);
-                setDraftBgOpacity(9);
-                setDraftBgBlur(1);
-                setDraftBgActive(false);
-                setDraftDaLogoUrl('');
-                setDraftSilagoLogoUrl('');
-                setDraftBagOngLogoUrl('');
-                setDraftSlsuUrl(DEFAULT_SLSU_PHOTO);
-                setDraftSlsuTitle(SLSU_DEFAULTS.centerTitle);
-                setDraftSlsuSubtitle(SLSU_DEFAULTS.centerSubtitle);
-                setDraftSlsuCaption(SLSU_DEFAULTS.caption);
-                setDraftSlsuMotto(SLSU_DEFAULTS.motto);
-                setDraftHeroBg({ ...HERO_BG_DEFAULTS });
-                showToast('Default media values staged. Save & Apply to publish them.');
-              }}
+              onClick={stageMediaDefaults}
               className="px-3.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs rounded-xl border border-slate-200 transition flex items-center gap-1.5 cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5 text-slate-500" />

@@ -57,7 +57,7 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
   // Populate drafts when barangay changes or edit mode is entered
   useEffect(() => {
     if (barangay) {
-      resetDrafts(barangay);
+      resetDrafts({ ...barangay, ...barangayProfiles[barangay.name]?.details });
     }
   }, [barangay, barangayProfiles]);
 
@@ -83,13 +83,13 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
 
   const handleEnterEdit = () => {
     if (!mayEdit) return;
-    resetDrafts(barangay);
+    resetDrafts({ ...barangay, ...barangayProfiles[barangay.name]?.details });
     setIsEditing(true);
     setSaveNotice('');
   };
 
   const handleCancelEdit = () => {
-    resetDrafts(barangay);
+    resetDrafts({ ...barangay, ...barangayProfiles[barangay.name]?.details });
     setIsEditing(false);
     setSaveNotice('');
   };
@@ -140,7 +140,7 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
       // localStorage might be unavailable
     }
 
-    const synced = await updateBarangayProfile(barangay.name, { displayName, classification: draftClassification });
+    const synced = await updateBarangayProfile(barangay.name, { displayName, classification: draftClassification, details: updates });
     setSaving(false);
     setIsEditing(false);
     setSaveNotice(synced ? `Barangay ${displayName} details saved.` : 'Saved on this device. Supabase sync could not be confirmed.');

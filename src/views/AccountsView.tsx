@@ -841,11 +841,11 @@ export const AccountsView: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <label className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
                       <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Assigned Barangays (Check Specific Served Barangays)</span>
+                      <span>Assigned Barangays</span>
                       <span className="text-red-500">*</span>
                     </label>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                      {parseAssignedBarangays(formData.barangay).length} Checked
+                      {parseAssignedBarangays(formData.barangay).length} selected
                     </span>
                   </div>
 
@@ -867,7 +867,7 @@ export const AccountsView: React.FC = () => {
                     <label key={name} className="flex min-w-0 items-start gap-2 rounded-md border border-slate-200 bg-white p-2 text-sm text-slate-800 has-checked:border-blue-300 has-checked:bg-blue-50">
                       <input type="checkbox" checked={isBarangayAssigned(name, formData.barangay)}
                         onChange={() => toggleAssignedBarangay(name)} className="mt-0.5 h-4 w-4 shrink-0 accent-blue-700" />
-                      <span className="break-words">{getBarangayLabel(name, barangayProfiles)}</span>
+                      <span className="min-w-0 break-words leading-snug">{getBarangayLabel(name, barangayProfiles)}</span>
                     </label>
                   ))}
                 </div>

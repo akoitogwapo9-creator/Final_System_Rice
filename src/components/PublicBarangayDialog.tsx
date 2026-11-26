@@ -2,7 +2,7 @@ import { useEffect, useId, useRef } from 'react';
 import L from 'leaflet';
 import { X } from 'lucide-react';
 import { getBarangayLabel, getBarangayZone, matchBarangay } from '../data/barangays';
-import { findSilagoBarangayFeature } from '../data/silagoGeoJson';
+import { applyBarangayMapProfile, findSilagoBarangayFeature } from '../data/silagoGeoJson';
 import { useApp } from '../context/AppContext';
 import { Barangay } from '../types';
 import { SafeImage } from './SafeImage';
@@ -18,7 +18,8 @@ export function PublicBarangayDialog({ barangay, onClose }: PublicBarangayDialog
   const dialogRef = useRef<HTMLDialogElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const name = getBarangayLabel(barangay.name, barangayProfiles);
-  const feature = findSilagoBarangayFeature(barangay.name);
+  const officialFeature = findSilagoBarangayFeature(barangay.name);
+  const profile = barangayProfiles[barangay.name];
   const photos = [...new Set(parcels
     .filter((parcel) => !parcel.isPendingSync && !parcel.is_pending_sync && matchBarangay(parcel.barangay, barangay.name))
     .map((parcel) => (parcel.fieldPhotoUrl || parcel.landPhotoUrl || '').trim())
@@ -30,6 +31,7 @@ export function PublicBarangayDialog({ barangay, onClose }: PublicBarangayDialog
     if (!dialog || !container) return;
     dialog.showModal();
 
+    const feature = officialFeature ? applyBarangayMapProfile(officialFeature, profile) : null;
     const center: L.LatLngTuple = feature?.properties.center || [barangay.lat, barangay.lng];
     const map = L.map(container, { scrollWheelZoom: false }).setView(center, 14);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -51,7 +53,7 @@ export function PublicBarangayDialog({ barangay, onClose }: PublicBarangayDialog
       map.remove();
       dialog.close();
     };
-  }, [feature, barangay.lat, barangay.lng]);
+  }, [officialFeature, profile, barangay.lat, barangay.lng]);
 
   return (
     <dialog
@@ -78,7 +80,7 @@ export function PublicBarangayDialog({ barangay, onClose }: PublicBarangayDialog
         <section>
           <h3 className="mb-2 text-sm font-semibold">Barangay map</h3>
           <div ref={mapRef} role="region" aria-label={`Map of ${name}`} className="relative isolate h-64 overflow-hidden rounded-lg border border-slate-200 bg-slate-100 sm:h-80" />
-          {!feature && <p className="mt-2 text-xs text-slate-600">The marker shows the barangay center.</p>}
+          {!officialFeature && <p className="mt-2 text-xs text-slate-600">The marker shows the barangay center.</p>}
         </section>
         <section>
           <h3 className="mb-2 text-sm font-semibold">Rice field photos</h3>

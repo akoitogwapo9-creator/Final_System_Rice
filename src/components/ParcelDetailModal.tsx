@@ -1,3 +1,4 @@
+import { formatRegistryDate, formatRegistryName } from '../data/registryPreferences';
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { FarmParcel, SeasonalProductionRecord } from '../types';
@@ -41,7 +42,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [seasonalModalOpen, setSeasonalModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<SeasonalProductionRecord | null>(null);
-  const { parcels, permissions, currentUser } = useApp();
+  const { parcels, permissions, currentUser, registryPreferences } = useApp();
   const parcel = parcels.find((item) => item.tagNumber === initialParcel?.tagNumber) || initialParcel;
   const formSchema = useRegistryFormSchema();
 
@@ -78,11 +79,11 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
   const profileDetails = [
     ['Registration Parcel ID', parcel.tagNumber],
     ['RSBSA Reference', parcel.swineNameOrId],
-    ['Date of Birth', parcel.birthday],
+    ['Date of Birth', formatRegistryDate(parcel.birthday, registryPreferences.dateFormat)],
     ['Contact Number', parcel.contactNumber],
     ['Farm Barangay', parcel.barangay],
     ['Purok / Sitio', parcel.purok],
-    ['Farm Area', areaHa ? `${areaHa.toFixed(2)} ha` : ''],
+    ['Farm Area', areaHa ? `${areaHa.toFixed(registryPreferences.areaPrecision)} ha` : ''],
     ['GPS Coordinates', `${formatCoords(latVal)}, ${formatCoords(lngVal)}`],
     ['Rice Variety', getRecordedCropValue(parcel.breed)],
     ['Seed Type', getRecordedCropValue(parcel.seedType)],
@@ -120,7 +121,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
                 </span>
               </div>
               <h2 className="text-lg sm:text-xl font-serif font-bold text-white mt-1.5 truncate">
-                {parcel.raiserName}
+                {formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)}
               </h2>
               <p className="text-xs text-white/75 flex items-center gap-1.5 mt-0.5 truncate">
                 <MapPin className="w-3.5 h-3.5 text-amber-300 shrink-0" />
@@ -197,7 +198,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
                 <p>
                   This certifies that the palay cultivation parcel designated under Tag ID{' '}
                   <strong className="font-mono text-emerald-800">{parcel.tagNumber}</strong>,
-                  registered to farmer-tiller <strong className="text-slate-900">{parcel.raiserName}</strong>,
+                  registered to farmer-tiller <strong className="text-slate-900">{formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)}</strong>,
                   located at <strong>{parcel.address}</strong>, has been officially georeferenced and field-surveyed.
                 </p>
                 <div className="grid grid-cols-2 gap-2 bg-white/70 p-3 rounded-xl border border-amber-200">
@@ -258,9 +259,9 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
           ) : (
             <article className="overflow-hidden rounded-lg border border-blue-200 bg-white">
               <header className="flex items-start gap-4 border-b border-blue-200 bg-blue-50 px-4 py-4 sm:px-5">
-                <SafeImage src={farmerPhoto} alt={parcel.raiserName} fallbackType="farmer" className="h-16 w-16 rounded border border-blue-200 object-cover" containerClassName="shrink-0" />
+                <SafeImage src={farmerPhoto} alt={formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)} fallbackType="farmer" className="h-16 w-16 rounded border border-blue-200 object-cover" containerClassName="shrink-0" />
                 <div className="min-w-0">
-                  <h3 className="font-serif text-lg font-bold text-slate-900">{parcel.raiserName}</h3>
+                  <h3 className="font-serif text-lg font-bold text-slate-900">{formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)}</h3>
                   <p className="mt-1 text-xs text-slate-600">{parcel.residential_address || parcel.address || 'N/A'}</p>
                 </div>
               </header>
@@ -362,7 +363,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
                   Confirm Delete Farm Registration
                 </h4>
                 <p className="text-xs text-rose-700 mt-0.5">
-                  Are you sure you want to permanently delete registration <strong>{parcel.tagNumber}</strong> for <strong>{parcel.raiserName}</strong>? This action cannot be undone.
+                  Are you sure you want to permanently delete registration <strong>{parcel.tagNumber}</strong> for <strong>{formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)}</strong>? This action cannot be undone.
                 </p>
                 <div className="flex items-center gap-2 mt-2.5">
                   <button

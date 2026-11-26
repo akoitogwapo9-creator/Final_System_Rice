@@ -1,5 +1,6 @@
+import { formatRegistryDate, readRegistryPreferences } from '../data/registryPreferences';
 import React, { useState, useMemo, useEffect } from 'react';
-import { useApp } from '../context/AppContext';
+import { DEFAULT_MUNICIPAL_BRANDING, useApp } from '../context/AppContext';
 import { supabaseDb, sortParcelsAlphabetically } from '../utils/supabaseClient';
 import {
   BARANGAYS,
@@ -118,15 +119,7 @@ const parseFarmerName = (parcel: FarmParcel) => {
   return { family, given, middle };
 };
 
-const formatBirthday = (bday?: string) => {
-  if (!bday) return '';
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(bday)) return bday;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(bday)) {
-    const [y, m, d] = bday.split('-');
-    return `${m}/${d}/${y}`;
-  }
-  return bday;
-};
+const formatBirthday = (value?: string) => value ? formatRegistryDate(value, readRegistryPreferences().dateFormat) : '';
 
 export const REGISTRY_COLUMNS = [
   { id: 'rsbsaNo', label: 'RSBSA No.', group: undefined },
@@ -158,7 +151,7 @@ const getReportParcelAreaHa = (parcel: FarmParcel) => {
 };
 
 export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => {
-  const { parcels, currentUser, activeSeason, t } = useApp();
+  const { parcels, currentUser, activeSeason, registryPreferences, municipalBranding, t } = useApp();
 
   const [reportType, setReportType] = useState<
     'official_registry' | 'seasonal_production' | 'barangay_consolidated' | 'census' | 'rsbsa'
@@ -1042,9 +1035,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
     document.body.removeChild(link);
   };
 
-  const getActiveSignatories = (): OfficialSignatory[] => {
-    if (persistedSignatories && persistedSignatories.length > 0) return persistedSignatories;
-    return [
+  const getActiveSignatories = (customSignatories = persistedSignatories): OfficialSignatory[] => {
+    const signatories: OfficialSignatory[] = customSignatories?.length ? customSignatories : [
       {
         id: 'reg-sig-1',
         roleLabel: 'Prepared by:',
@@ -1064,6 +1056,41 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
         title: approvedTitle || 'Municipal Mayor'
       }
     ];
+    if (!registryPreferences.agriculturistName.trim()) return signatories;
+    const index = signatories.findIndex((signatory) => /review|agriculturist/i.test(`${signatory.roleLabel} ${signatory.title}`));
+    const reviewer = {
+      id: 'municipal-agriculturist', roleLabel: 'Reviewed by:',
+      name: registryPreferences.agriculturistName, title: registryPreferences.agriculturistTitle
+    };
+    return index === -1 ? [...signatories, reviewer] : signatories.map((signatory, position) =>
+      position === index ? { ...signatory, name: reviewer.name, title: reviewer.title } : signatory
+    );
+  };
+
+  const officeHeader = <K extends 'republicText' | 'provinceText' | 'municipalityName' | 'officeName'>(key: K, documentValue: string) =>
+    municipalBranding[key] !== DEFAULT_MUNICIPAL_BRANDING[key] ? municipalBranding[key] || documentValue : documentValue;
+  const withMunicipalHeaders = <T extends Pick<OfficialReportLetter, 'republicHeader' | 'provinceHeader' | 'municipalityHeader' | 'officeHeader'>>(document: T) => ({
+    ...document,
+    republicHeader: officeHeader('republicText', document.republicHeader),
+    provinceHeader: officeHeader('provinceText', document.provinceHeader),
+    municipalityHeader: officeHeader('municipalityName', document.municipalityHeader),
+    officeHeader: officeHeader('officeName', document.officeHeader)
+  });
+  const officialLetter = {
+    ...withMunicipalHeaders(currentLetter),
+    signatories: getActiveSignatories(currentLetter.signatories)
+  };
+  const officialIrrigators = {
+    ...withMunicipalHeaders(irrigatorsData),
+    signatories: irrigatorsData.signatories?.length ? getActiveSignatories(irrigatorsData.signatories) : undefined,
+    notedByName: registryPreferences.agriculturistName || irrigatorsData.notedByName,
+    notedByTitle: registryPreferences.agriculturistName ? registryPreferences.agriculturistTitle : irrigatorsData.notedByTitle
+  };
+  const officialMpcsrs = {
+    ...mpcsrsData,
+    signatories: mpcsrsData.signatories?.length ? getActiveSignatories(mpcsrsData.signatories) : undefined,
+    approvedByName: registryPreferences.agriculturistName || mpcsrsData.approvedByName,
+    approvedByTitle: registryPreferences.agriculturistName ? registryPreferences.agriculturistTitle : mpcsrsData.approvedByTitle
   };
 
   const handleExportExcel = () => {
@@ -1076,20 +1103,18 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
         currentLetter.date || reportDate,
         currentLetter.memoRef || memoRef,
         getActiveSignatories(),
-        currentLetter,
-        irrigatorsData,
-        mpcsrsData
+        officialLetter,
+        officialIrrigators,
+        officialMpcsrs
       );
     } else if (documentView === 'mpcsrs_report') {
-      exportMpcsrsExcel(mpcsrsData);
+      exportMpcsrsExcel(officialMpcsrs);
     } else if (documentView === 'irrigators_letter') {
-      exportIrrigatorsExcel(irrigatorsData);
+      exportIrrigatorsExcel(officialIrrigators);
     } else if (documentView === 'letter') {
       exportLetterExcel(
-        currentLetter,
-        currentLetter.signatories && currentLetter.signatories.length > 0
-          ? currentLetter.signatories
-          : getActiveSignatories()
+        officialLetter,
+        officialLetter.signatories
       );
     } else {
       exportRegistryTableExcel(
@@ -1115,21 +1140,19 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
           currentLetter.date || reportDate,
           currentLetter.memoRef || memoRef,
           getActiveSignatories(),
-          currentLetter,
-          irrigatorsData,
-          mpcsrsData,
+          officialLetter,
+          officialIrrigators,
+          officialMpcsrs,
           { paperSize, orientation }
         );
       } else if (documentView === 'mpcsrs_report') {
-        await exportMpcsrsWord(mpcsrsData);
+        await exportMpcsrsWord(officialMpcsrs);
       } else if (documentView === 'irrigators_letter') {
-        await exportIrrigatorsWord(irrigatorsData);
+        await exportIrrigatorsWord(officialIrrigators);
       } else if (documentView === 'letter') {
         await exportLetterWord(
-          currentLetter,
-          currentLetter.signatories && currentLetter.signatories.length > 0
-            ? currentLetter.signatories
-            : getActiveSignatories()
+          officialLetter,
+          officialLetter.signatories
         );
       } else {
         await exportRegistryTableWord(
@@ -1601,7 +1624,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                   }
                   return renderWordSheet(
                     <OfficialLetterDocument
-                      letter={currentLetter}
+                      letter={isDirectEditingLetter ? currentLetter : officialLetter}
                       activeBarangay={selectedBarangay}
                       activeSeason={selectedSeason}
                       farmerCount={uniqueFarmerCount}
@@ -1630,7 +1653,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                   }
                   return renderWordSheet(
                     <OfficialIrrigatorsDirectoryDocument
-                      data={irrigatorsData}
+                      data={isDirectEditingLetter ? irrigatorsData : officialIrrigators}
                       onUpdateData={handleSaveIrrigatorsData}
                       isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
@@ -1653,7 +1676,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                   }
                   return renderWordSheet(
                     <MpcsrsPalayReportDocument
-                      data={mpcsrsData}
+                      data={isDirectEditingLetter ? mpcsrsData : officialMpcsrs}
                       onUpdateData={handleSaveMpcsrsData}
                       isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
@@ -1689,6 +1712,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                       selectedBarangay={selectedBarangay}
                       preparedBy={currentLetter.preparedBy || preparedBy}
                       preparedTitle={currentLetter.preparedTitle || preparedTitle}
+                      signatories={getActiveSignatories()}
                       reviewedBy={currentLetter.reviewedBy || reviewedBy}
                       reviewedTitle={currentLetter.reviewedTitle || reviewedTitle}
                       approvedBy={currentLetter.approvedBy || approvedBy}
@@ -1715,7 +1739,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                   }
                   return renderWordSheet(
                     <OfficialLetterDocument
-                      letter={currentLetter}
+                      letter={isDirectEditingLetter ? currentLetter : officialLetter}
                       activeBarangay={selectedBarangay}
                       activeSeason={selectedSeason}
                       farmerCount={uniqueFarmerCount}
@@ -1744,7 +1768,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                   }
                   return renderWordSheet(
                     <OfficialIrrigatorsDirectoryDocument
-                      data={irrigatorsData}
+                      data={isDirectEditingLetter ? irrigatorsData : officialIrrigators}
                       onUpdateData={handleSaveIrrigatorsData}
                       isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
@@ -1767,7 +1791,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                   }
                   return renderWordSheet(
                     <MpcsrsPalayReportDocument
-                      data={mpcsrsData}
+                      data={isDirectEditingLetter ? mpcsrsData : officialMpcsrs}
                       onUpdateData={handleSaveMpcsrsData}
                       isEditable={Boolean(currentUser) && isDirectEditingLetter}
                       orientation={orientation}
@@ -1805,6 +1829,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
                       selectedBarangay={selectedBarangay}
                       preparedBy={currentLetter.preparedBy || preparedBy}
                       preparedTitle={currentLetter.preparedTitle || preparedTitle}
+                      signatories={getActiveSignatories()}
                       reviewedBy={currentLetter.reviewedBy || reviewedBy}
                       reviewedTitle={currentLetter.reviewedTitle || reviewedTitle}
                       approvedBy={currentLetter.approvedBy || approvedBy}

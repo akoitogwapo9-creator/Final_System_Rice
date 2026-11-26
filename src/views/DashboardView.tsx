@@ -1,3 +1,4 @@
+import { formatRegistryName } from '../data/registryPreferences';
 import { SeasonProductionPanel } from '../components/SeasonProductionPanel';
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
@@ -188,7 +189,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenCropPlanting,
   onSelectBarangay
 }) => {
-  const { parcels, lftAccounts, permissions, barangayProfiles } = useApp();
+  const { parcels, lftAccounts, permissions, barangayProfiles, registryPreferences } = useApp();
   const [selectedBarangay, setSelectedBarangay] = useState('ALL');
   const [metric, setMetric] = useState<DashboardMetric>('ecosystem');
   const [chartStyle, setChartStyle] = useState<ChartStyle>('bar');
@@ -697,7 +698,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       {parcel.tagNumber}
                     </td>
                     <td className="px-4 py-2.5">
-                      <div className="font-semibold text-slate-900">{parcel.raiserName}</div>
+                      <div className="font-semibold text-slate-900">{formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)}</div>
                       <div className="text-[10.5px] text-slate-500">
                         {parcel.contactNumber || 'No contact recorded'}
                       </div>

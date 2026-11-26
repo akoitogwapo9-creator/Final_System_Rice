@@ -1,3 +1,4 @@
+import { formatRegistryName } from '../data/registryPreferences';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { BARANGAYS, getUserAssignedBarangays, isUserAuthorizedForBarangay, matchBarangay } from '../data/barangays';
@@ -176,7 +177,8 @@ export const SubsidiesView: React.FC = () => {
     setOwnerSubsidyClaim,
     bulkMarkSubsidyClaims,
     addSubsidyHistoryEntry,
-    deleteSubsidyHistoryEntry
+    deleteSubsidyHistoryEntry,
+    registryPreferences
   } = useApp();
 
   const todayIso = () => new Date().toISOString().split('T')[0];
@@ -577,7 +579,7 @@ export const SubsidiesView: React.FC = () => {
         fundingSource: logGiveawayDraft.fundingSource.trim() || 'DA / LGU-Silago',
         parcelTag: parcel.tagNumber,
         rsbsaNo: parcel.swineNameOrId || parcel.rsbsa_no || '',
-        ownerName: parcel.raiserName.toUpperCase(),
+        ownerName: formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames),
         barangay: parcel.barangay,
         inputType: logGiveawayDraft.inputType,
         itemGiven: logGiveawayDraft.itemGiven.trim() || logGiveawayDraft.inputType,
@@ -1224,7 +1226,7 @@ export const SubsidiesView: React.FC = () => {
                           </td>
 
                           <td className="py-2.5 px-2.5 align-top">
-                            <div className="font-bold text-slate-900 leading-snug">{parcel.raiserName.toUpperCase()}</div>
+                            <div className="font-bold text-slate-900 leading-snug">{formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)}</div>
                             <div className="text-[11px] text-slate-700 font-medium mt-0.5">
                               Brgy. {parcel.barangay} &bull; {areaHa.toFixed(2)} ha
                               {parcel.variety || parcel.breed ? ` • ${parcel.variety || parcel.breed}` : ''}

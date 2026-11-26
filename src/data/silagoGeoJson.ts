@@ -181,3 +181,27 @@ export function findSilagoBarangayFeature(name: string): SilagoGeoJSONFeature | 
         || (f.properties.id && norm.includes(f.properties.id));
     });
 }
+
+export function applyBarangayMapProfile(
+  feature: SilagoGeoJSONFeature,
+  profile?: import('./barangays').BarangayProfiles[string]
+): SilagoGeoJSONFeature {
+  if (!profile) return feature;
+  const { details, boundary } = profile;
+  const geometry = boundary && boundary.length >= 3 ? (() => {
+    const ring = boundary.map(([lat, lng]) => [lng, lat]);
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) ring.push(first);
+    return { type: 'Polygon' as const, coordinates: [ring] };
+  })() : feature.geometry;
+  return {
+    ...feature,
+    geometry,
+    properties: {
+      ...feature.properties,
+      center: [details?.lat ?? feature.properties.center[0], details?.lng ?? feature.properties.center[1]],
+      areaHa: details?.totalAreaHa ?? feature.properties.areaHa
+    }
+  };
+}

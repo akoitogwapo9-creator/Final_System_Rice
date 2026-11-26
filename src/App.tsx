@@ -35,7 +35,6 @@ import {
   clearSessionActiveTab,
   clearLegacyLocalAuthStorage
 } from './utils/sessionAuth';
-import { OfflineBanner } from './components/common/OfflineBanner';
 import { PWAInstallButton } from './components/common/PWAInstallButton';
 import {
   LayoutDashboard,
@@ -427,7 +426,6 @@ const AppContent: React.FC = () => {
       )}
 
       {/* Top Offline Detection & Queued Sync Banner */}
-      <OfflineBanner />
 
       {/* View Switcher: Public Landing Page vs Authenticated / LFT Portal */}
       {viewMode === 'landing' ? (
@@ -438,7 +436,7 @@ const AppContent: React.FC = () => {
           />
         </div>
       ) : (
-        <div className={`app-portal relative z-10 flex min-h-screen ${bgActive && bgPhotoUrl ? 'has-portal-wallpaper bg-transparent' : 'bg-[#f4f6f1]'}`}>
+        <div className={`app-portal relative z-10 flex ${activeTab === 'registry_form' ? 'h-dvh overflow-hidden' : 'min-h-screen'} ${bgActive && bgPhotoUrl ? 'has-portal-wallpaper bg-transparent' : 'bg-[#f4f6f1]'}`}>
           {/* Mobile Sidebar Backdrop */}
           {mobileSidebarOpen && (
             <div
@@ -449,7 +447,7 @@ const AppContent: React.FC = () => {
 
           {/* Registry navigation */}
           <aside
-            className={`portal-sidebar fixed inset-y-0 left-0 z-50 bg-gov-forest text-white flex flex-col justify-between border-r border-gov-forest-dark transition-all duration-300 lg:translate-x-0 lg:static lg:h-screen shrink-0 ${
+            className={`portal-sidebar fixed inset-y-0 left-0 z-50 bg-gov-forest text-white flex flex-col justify-between border-r border-gov-forest-dark transition-all duration-300 lg:translate-x-0 lg:static lg:h-dvh shrink-0 ${
               mobileSidebarOpen ? 'translate-x-0 w-68' : '-translate-x-full lg:translate-x-0'
             } ${isSidebarCollapsed ? 'lg:w-[70px]' : 'lg:w-68'}`}
           >
@@ -759,9 +757,9 @@ const AppContent: React.FC = () => {
           </aside>
 
           {/* Main Content Area */}
-          <div className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto">
+          <div className={`flex h-dvh min-w-0 flex-1 flex-col ${activeTab === 'registry_form' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
             {/* Flush Formal Office Top Header Bar */}
-            <header className="portal-topbar bg-white border-b border-gov-line px-4 sm:px-6 py-2.5 flex items-center justify-between sticky top-0 z-30 gap-4">
+            <header className="portal-topbar bg-white border-b border-gov-line px-4 sm:px-6 py-2.5 flex items-center justify-between sticky top-0 z-30 gap-4 shrink-0">
               <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
                 {/* Mobile sidebar toggle button */}
                 <button
@@ -857,7 +855,7 @@ const AppContent: React.FC = () => {
             </header>
 
             {/* Body View Area */}
-            <main className={`portal-content flex-1 p-4 sm:p-5 lg:p-6 ${bgActive && bgPhotoUrl ? 'bg-transparent' : 'bg-gov-canvas'}`}>
+            <main className={`portal-content min-h-0 flex-1 ${activeTab === 'registry_form' ? 'overflow-hidden p-2 sm:p-3' : 'p-4 sm:p-5 lg:p-6'} ${bgActive && bgPhotoUrl ? 'bg-transparent' : 'bg-gov-canvas'}`}>
               {activeTab === 'dashboard' && isCentralAdmin && (
                 <DashboardView
                   onNavigateToTab={(tab) => setActiveTab(tab)}

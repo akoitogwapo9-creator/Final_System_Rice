@@ -1,3 +1,5 @@
+import { useApp } from '../context/AppContext';
+import { formatRegistryDate, formatRegistryName } from '../data/registryPreferences';
 import React, { useState, useEffect, useMemo } from 'react';
 import { FarmParcel, OfficialSignatory } from '../types';
 import { BagongPilipinasLogo, SilagoSeal, SouthernLeyteSeal, DaLogo } from './Seals';
@@ -69,21 +71,7 @@ const parseFarmerName = (parcel: FarmParcel) => {
   return { family, given, middle };
 };
 
-const formatBirthday = (raw?: string) => {
-  if (!raw) return '';
-  const trimmed = raw.trim();
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
-    return trimmed;
-  }
-  const d = new Date(trimmed);
-  if (!isNaN(d.getTime())) {
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const yyyy = d.getFullYear();
-    return `${mm}/${dd}/${yyyy}`;
-  }
-  return trimmed;
-};
+
 
 export const OfficialRegistryTable: React.FC<OfficialRegistryTableProps> = ({
   reportParcels,
@@ -147,6 +135,10 @@ export const OfficialRegistryTable: React.FC<OfficialRegistryTableProps> = ({
     commodity: { label: 'COMMODITY', width: '6%' }
   };
 
+  const { registryPreferences, activeSeason } = useApp();
+  const displayName = (name: string) => formatRegistryName(name, registryPreferences.uppercaseNames);
+  const formatBirthday = (value?: string) => value ? formatRegistryDate(value, registryPreferences.dateFormat) : '';
+
   const renderCellByColId = (colId: string, p: FarmParcel, family: string, given: string, middle: string, bday: string, farmLoc: string) => {
     switch (colId) {
       case 'rsbsaNo':
@@ -157,26 +149,26 @@ export const OfficialRegistryTable: React.FC<OfficialRegistryTableProps> = ({
         );
       case 'farmerName':
         return (
-          <td key={colId} className="border border-black px-1.5 py-1 font-bold text-left uppercase break-words align-middle">
-            {family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || '-')}
+          <td key={colId} className="border border-black px-1.5 py-1 font-bold text-left break-words align-middle">
+            {displayName(family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || '-'))}
           </td>
         );
       case 'familyName':
         return (
-          <td key={colId} className="border border-black px-1.5 py-1 font-bold text-left uppercase whitespace-nowrap">
-            {family}
+          <td key={colId} className="border border-black px-1.5 py-1 font-bold text-left whitespace-nowrap">
+            {displayName(family)}
           </td>
         );
       case 'givenName':
         return (
-          <td key={colId} className="border border-black px-1.5 py-1 font-bold text-left uppercase whitespace-nowrap">
-            {given}
+          <td key={colId} className="border border-black px-1.5 py-1 font-bold text-left whitespace-nowrap">
+            {displayName(given)}
           </td>
         );
       case 'middleName':
         return (
-          <td key={colId} className="border border-black px-1.5 py-1 font-bold text-left uppercase whitespace-nowrap">
-            {middle}
+          <td key={colId} className="border border-black px-1.5 py-1 font-bold text-left whitespace-nowrap">
+            {displayName(middle)}
           </td>
         );
       case 'barangay':
@@ -405,6 +397,7 @@ export const OfficialRegistryTable: React.FC<OfficialRegistryTableProps> = ({
         <h3 className="text-xs sm:text-sm font-serif font-black text-black uppercase tracking-wider">
           OFFICIAL MASTERLIST OF RSBSA-REGISTERED RICE FARMERS &amp; GIS-MAPPED AGRICULTURAL LANDHOLDINGS
         </h3>
+        <p className="text-xs">{activeSeason}</p>
         <p className="text-[11px] font-sans font-bold text-slate-800 uppercase tracking-wide">
           {selectedBarangay === 'ALL'
             ? 'CONSOLIDATED REGISTRY - ALL SILAGO BARANGAYS'
@@ -667,23 +660,23 @@ export const OfficialRegistryTable: React.FC<OfficialRegistryTableProps> = ({
                       </td>
                     )}
                     {visibleColumns.farmerName && (
-                      <td className="border border-black px-1.5 py-1 font-bold text-left uppercase break-words align-middle">
-                        {family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || '-')}
+                      <td className="border border-black px-1.5 py-1 font-bold text-left break-words align-middle">
+                        {displayName(family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || '-'))}
                       </td>
                     )}
                     {visibleColumns.familyName && (
-                      <td className="border border-black px-1.5 py-1 font-bold text-left uppercase whitespace-nowrap">
-                        {family}
+                      <td className="border border-black px-1.5 py-1 font-bold text-left whitespace-nowrap">
+                        {displayName(family)}
                       </td>
                     )}
                     {visibleColumns.givenName && (
-                      <td className="border border-black px-1.5 py-1 font-bold text-left uppercase whitespace-nowrap">
-                        {given}
+                      <td className="border border-black px-1.5 py-1 font-bold text-left whitespace-nowrap">
+                        {displayName(given)}
                       </td>
                     )}
                     {visibleColumns.middleName && (
-                      <td className="border border-black px-1.5 py-1 font-bold text-left uppercase whitespace-nowrap">
-                        {middle}
+                      <td className="border border-black px-1.5 py-1 font-bold text-left whitespace-nowrap">
+                        {displayName(middle)}
                       </td>
                     )}
                     {visibleColumns.barangay && (

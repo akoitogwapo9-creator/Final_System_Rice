@@ -210,10 +210,6 @@ export const MpcsrsPalayReportDocument: React.FC<MpcsrsPalayReportDocumentProps>
       {/* 1. Official Standardized Government Letterhead */}
       <StandardReportHeader
         isEditable={isEditable}
-        republicHeader="Republic of the Philippines"
-        provinceHeader="Province of Southern Leyte"
-        municipalityHeader="MUNICIPALITY OF SILAGO"
-        officeHeader="MUNICIPAL AGRICULTURE OFFICE"
         subtitle={
           totalPages && totalPages > 1
             ? `MONTHLY PALAY AND CORN SITUATION REPORTING SYSTEM (MPCSRS) - PAGE ${pageNumber} OF ${totalPages}`

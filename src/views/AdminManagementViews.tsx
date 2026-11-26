@@ -462,7 +462,7 @@ function InlineBarangaySurveyMap({ barangay, points, onPointsChange, center, onC
 }
 
 export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (tab: PortalTab) => void; onMeasureBarangay: (barangay: Barangay) => void }) {
-  const { lftAccounts, parcels, permissions, barangayProfiles } = useApp();
+  const { lftAccounts, parcels, permissions, barangayProfiles, updateBarangayProfile } = useApp();
   if (!permissions.isCentralAdmin) {
     return (
       <div className="mx-auto max-w-xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-900">
@@ -474,6 +474,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   }
   const [query, setQuery] = useState('');
   const [zoneFilter, setZoneFilter] = useState('');
+  const [boundaryEditorOpen, setBoundaryEditorOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const surveyorTopRef = useRef<HTMLDivElement | null>(null);
 
@@ -514,16 +515,17 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
         lng: Number(saved.centerLng ?? barangay.lng),
         focalPerson: saved.focalPerson || officer?.name || barangay.focalPerson || '',
         contactNumber: saved.contactNumber || officer?.contactNumber || barangay.contactNumber || '',
+        ...barangayProfiles[barangay.name]?.details,
         farmCount,
         assigned: Boolean(officer),
-        hasSavedBoundary: Boolean(saved.areaHa || savedPointsState[barangay.name]?.length)
+        hasSavedBoundary: Boolean(barangayProfiles[barangay.name]?.boundary?.length || savedPointsState[barangay.name]?.length)
       };
     });
-  }, [lftAccounts, parcels, savedSettingsState, savedPointsState]);
+  }, [lftAccounts, parcels, savedSettingsState, savedPointsState, barangayProfiles]);
 
   const filteredRows = rows.filter((row) => {
     const zone = getBarangayZone(row.name, barangayProfiles);
-    return (!zoneFilter || zone === zoneFilter) &&
+    return (!zoneFilter || (zoneFilter === 'non-coastal' ? zone !== 'Coastal' : zone === zoneFilter)) &&
       `${getBarangayLabel(row.name, barangayProfiles)} ${row.focalPerson} ${row.terrain}`.toLowerCase().includes(query.trim().toLowerCase());
   });
   const zoneColors: Record<string, string> = {
@@ -535,13 +537,17 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   };
 
   // Active barangay for top GIS surveyor map
-  const [activeBarangay, setActiveBarangay] = useState<Barangay>(BARANGAYS[0]);
-  const [points, setPoints] = useState<[number, number][]>(() => {
-    const saved = getSavedPoints();
-    if (saved[BARANGAYS[0]?.name]?.length) return saved[BARANGAYS[0]?.name];
-    return getOfficialBoundaryPoints(BARANGAYS[0]?.name || '');
-  });
-  const [centerCoords, setCenterCoords] = useState<[number, number]>([BARANGAYS[0]?.lat || 10.5335, BARANGAYS[0]?.lng || 125.1620]);
+  const [activeBarangay, setActiveBarangay] = useState<Barangay>(rows[0]);
+  const pointsForBarangay = (name: string) => {
+    const boundary = barangayProfiles[name]?.boundary;
+    return boundary === null ? getOfficialBoundaryPoints(name) : boundary || getSavedPoints()[name] || getOfficialBoundaryPoints(name);
+  };
+  const [points, setPoints] = useState<[number, number][]>(() => pointsForBarangay(activeBarangay.name));
+  const [centerCoords, setCenterCoords] = useState<[number, number]>([activeBarangay.lat, activeBarangay.lng]);
+  const savedBoundary = barangayProfiles[activeBarangay.name]?.boundary;
+  useEffect(() => {
+    if (savedBoundary !== undefined) setPoints(pointsForBarangay(activeBarangay.name));
+  }, [activeBarangay.name, savedBoundary]);
 
   const measuredAreaHa = useMemo(() => polygonAreaHa(points), [points]);
   const measuredPerimeterKm = useMemo(() => perimeterKm(points), [points]);
@@ -549,12 +555,8 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   const handleSelectBarangay = (b: Barangay) => {
     setActiveBarangay(b);
     setCenterCoords([b.lat, b.lng]);
-    const saved = getSavedPoints();
-    if (saved[b.name]?.length) {
-      setPoints(saved[b.name]);
-    } else {
-      setPoints(getOfficialBoundaryPoints(b.name));
-    }
+    setPoints(pointsForBarangay(b.name));
+    setBoundaryEditorOpen(true);
     surveyorTopRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
@@ -573,8 +575,9 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
     setPoints([]);
   };
 
-  const handleSaveBoundary = () => {
+  const handleSaveBoundary = async () => {
     if (!permissions.isCentralAdmin) return;
+    if (points.length < 3) { setNotice('Add at least three points to save a boundary.'); return; }
     try {
       const allPoints = getSavedPoints();
       allPoints[activeBarangay.name] = points;
@@ -592,7 +595,14 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
       localStorage.setItem('silago_gis_measure_settings', JSON.stringify(allSettings));
       setSavedSettingsState(allSettings);
 
-      setNotice(`Boundary & measured area (${measuredAreaHa.toFixed(2)} ha) saved for ${activeBarangay.name}.`);
+      const previous = barangayProfiles[activeBarangay.name];
+      const synced = await updateBarangayProfile(activeBarangay.name, {
+        displayName: getBarangayLabel(activeBarangay.name, barangayProfiles),
+        classification: getBarangayZone(activeBarangay.name, barangayProfiles),
+        details: { ...previous?.details, totalAreaHa: measuredAreaHa, lat: centerCoords[0], lng: centerCoords[1] },
+        boundary: points
+      });
+      setNotice(synced ? 'Boundary and measured area saved.' : 'Boundary saved on this device. Cloud sync is pending.');
       setTimeout(() => setNotice(''), 4000);
     } catch {
       setNotice('Unable to save boundary coordinates on this browser.');
@@ -600,17 +610,12 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   };
 
   const handleCancelMeasure = () => {
-    const saved = getSavedPoints();
-    if (saved[activeBarangay.name]?.length) {
-      setPoints(saved[activeBarangay.name]);
-    } else {
-      setPoints(getOfficialBoundaryPoints(activeBarangay.name));
-    }
+    setPoints(pointsForBarangay(activeBarangay.name));
     setNotice('Changes cancelled.');
     setTimeout(() => setNotice(''), 3000);
   };
 
-  const handleDeleteBoundary = (b: Barangay) => {
+  const handleDeleteBoundary = async (b: Barangay) => {
     if (!permissions.isCentralAdmin) return;
     if (window.confirm(`Reset boundary for ${b.name} to official default?`)) {
       const allPoints = getSavedPoints();
@@ -626,7 +631,13 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
       if (activeBarangay.name === b.name) {
         setPoints(getOfficialBoundaryPoints(b.name));
       }
-      setNotice(`Boundary reset for ${b.name}.`);
+      const official = BARANGAYS.find(({ name }) => name === b.name);
+      const synced = await updateBarangayProfile(b.name, {
+        displayName: getBarangayLabel(b.name, barangayProfiles), classification: getBarangayZone(b.name, barangayProfiles),
+        details: { ...barangayProfiles[b.name]?.details, totalAreaHa: findSilagoBarangayFeature(b.name)?.properties.areaHa || official?.totalAreaHa },
+        boundary: null
+      });
+      setNotice(synced ? `Boundary reset for ${b.name}.` : 'Boundary reset on this device. Cloud sync is pending.');
       setTimeout(() => setNotice(''), 3500);
     }
   };
@@ -669,7 +680,13 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   return (
     <div ref={surveyorTopRef} className="mx-auto w-full max-w-6xl space-y-4 px-1 py-1 sm:px-2">
       {/* 1. TOP SECTION: INTERACTIVE LIVE GIS BOUNDARY SURVEYOR MAP (Matching Reference Image 2) */}
-      <section className={`${card} p-4 sm:p-5 space-y-3`}>
+      <section className={`${card} space-y-3 p-3`}>
+        <button type="button" aria-expanded={boundaryEditorOpen} onClick={() => setBoundaryEditorOpen(!boundaryEditorOpen)}
+          className="flex w-full items-center justify-between gap-2 text-left text-sm font-semibold text-blue-900">
+          <span>Boundary Survey · {getBarangayLabel(activeBarangay.name, barangayProfiles)}</span>
+          {boundaryEditorOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+        {boundaryEditorOpen && <div className="space-y-3">
         {/* Top controls above map */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2 flex-wrap">
@@ -679,7 +696,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-800 text-xs font-bold hover:bg-emerald-100 transition cursor-pointer shadow-2xs"
             >
               <Sparkles className="w-3.5 h-3.5 text-emerald-700" />
-              <span>Auto-Generate Sample Boundary</span>
+              <span>Load Official Boundary</span>
             </button>
             <button
               type="button"
@@ -700,9 +717,6 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
               <span>Clear Points</span>
             </button>
           </div>
-          <span className="text-[11px] text-slate-400 italic">
-            * Boundary coordinates and measured area will be saved directly with this barangay record.
-          </span>
         </div>
 
         {/* Live Leaflet Map Canvas */}
@@ -748,6 +762,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
             </button>
           </div>
         </div>
+        </div>}
       </section>
 
       {notice && (
@@ -774,6 +789,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
           <select aria-label="Filter by barangay zone" value={zoneFilter} onChange={(event) => setZoneFilter(event.target.value)}
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
             <option value="">All Zones</option>
+            <option value="non-coastal">All Non-Coastal Zones</option>
             {getBarangayClassifications(barangayProfiles).map((zone) => <option key={zone}>{zone}</option>)}
           </select>
           <span className="text-xs text-slate-400 font-medium">
@@ -1155,11 +1171,11 @@ function BuilderSwitch({ label, fieldName, checked, disabled, onChange }: {
   label: string; fieldName: string; checked: boolean; disabled?: boolean; onChange: (next: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-sm text-slate-700"
+    <label className="flex items-center gap-1 text-xs text-slate-700"
       title={disabled ? 'Turn off Required before hiding this core field.' : undefined}>
       <input type="checkbox" role="switch" checked={checked} disabled={disabled} className="peer sr-only"
         aria-label={`${label}: ${fieldName}`} onChange={(event) => onChange(event.target.checked)} />
-      <span aria-hidden="true" className="relative h-5 w-9 rounded-full bg-slate-400 after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform peer-checked:bg-blue-700 peer-checked:after:translate-x-4 peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-focus-visible:ring-offset-2 peer-disabled:opacity-50" />
+      <span aria-hidden="true" className="relative h-4 w-7 rounded-full bg-slate-400 after:absolute after:left-0.5 after:top-0.5 after:h-3 after:w-3 after:rounded-full after:bg-white after:transition-transform peer-checked:bg-blue-700 peer-checked:after:translate-x-3 peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-focus-visible:ring-offset-2 peer-disabled:opacity-50" />
       {label}
     </label>
   );
@@ -1271,9 +1287,11 @@ export function RegistryFormCustomizationView() {
     'crop-ecosystem': ecosystems, 'crop-ia': irrigationAssociations, 'crop-tenure': tenures, 'crop-season': seasons
   };
 
+  const rowButton = "inline-flex items-center rounded border border-slate-200 px-1.5 py-0.5 text-xs font-semibold text-blue-800 hover:bg-blue-50 disabled:opacity-30";
+
   return (
-    <div className="mx-auto max-w-7xl space-y-4">
-      <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-100 bg-white p-4 shadow-sm">
+    <div className="mx-auto flex h-full min-h-0 max-w-[100rem] flex-col gap-2 overflow-hidden">
+      <header className="z-20 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-100 bg-white px-3 py-2 shadow-sm">
         <div>
           <h1 className="text-lg font-bold text-blue-950">Form Customization</h1>
           <span className="text-xs text-slate-600">{dirty ? 'Unpublished changes' : 'Published settings'}</span>
@@ -1287,16 +1305,16 @@ export function RegistryFormCustomizationView() {
         </div>
       </header>
 
-      <nav aria-label="Form switcher" className="grid gap-2 rounded-lg border border-blue-100 bg-white p-2 sm:grid-cols-2">
+      <nav aria-label="Form switcher" className="grid shrink-0 grid-cols-2 gap-1 rounded-lg border border-blue-100 bg-white p-1">
         {(Object.keys(FORM_NAMES) as FormTarget[]).map((target) => (
           <button key={target} type="button" aria-pressed={target === formTarget} onClick={() => setFormTarget(target)}
-            className={`rounded-md px-4 py-3 text-left text-sm font-semibold ${target === formTarget ? 'bg-blue-700 text-white' : 'text-blue-950 hover:bg-blue-50'}`}>
+            className={`rounded-md px-3 py-2 text-left text-sm font-semibold ${target === formTarget ? 'bg-blue-700 text-white' : 'text-blue-950 hover:bg-blue-50'}`}>
             {FORM_NAMES[target]}
           </button>
         ))}
       </nav>
 
-      <nav aria-label="Form sections" className="flex flex-wrap gap-2">
+      <nav aria-label="Form sections" className="flex shrink-0 flex-wrap gap-1">
         {formSections.map((section) => (
           <button key={section.id} type="button" aria-pressed={activeSection?.id === section.id}
             className={`${builderButton} aria-pressed:border-blue-400 aria-pressed:bg-blue-50 aria-pressed:text-blue-900`}
@@ -1306,8 +1324,8 @@ export function RegistryFormCustomizationView() {
       </nav>
       {notice && <p role="status" className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-900">{notice}</p>}
 
-      <div className="grid items-start gap-4 lg:grid-cols-2">
-        <section className="space-y-2">
+      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 overflow-hidden lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] lg:grid-rows-1">
+        <section className="flex min-h-0 min-w-0 flex-col gap-1">
           <header className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-semibold text-blue-950">{activeSection?.label}</h2>
             <div className="flex flex-wrap gap-2">
@@ -1321,42 +1339,45 @@ export function RegistryFormCustomizationView() {
               <button type="button" className={builderButton} onClick={() => openField()}>Add Field</button>
             </div>
           </header>
+          <div className="min-h-0 space-y-1 overflow-auto overscroll-contain">
           {sectionFields.map((field, index) => (
-            <article key={field.id} className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="font-semibold text-slate-900">{field.name}</h3>
-                <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-800">
+            <article key={field.id} className="flex min-w-[460px] items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <h3 title={field.name} className="truncate text-sm font-semibold text-slate-900">{field.name}</h3>
+                <span className="shrink-0 rounded bg-blue-50 px-1 py-0.5 text-[10px] font-medium text-blue-800">
                   {FIELD_TYPES[field.fieldType || 'Text Field'] || field.fieldType}
                 </span>
-                {coreField(field) && <span tabIndex={0} title={CORE_LOCK_NOTE} aria-label={CORE_LOCK_NOTE} className="inline-flex items-center gap-1 text-xs text-slate-600"><Lock className="h-3 w-3" /> Core</span>}
+                {coreField(field) && <span tabIndex={0} title={CORE_LOCK_NOTE} aria-label={CORE_LOCK_NOTE} className="inline-flex shrink-0 items-center gap-1 text-[10px] text-slate-600"><Lock className="h-3 w-3" /> Core</span>}
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <div className="flex shrink-0 items-center gap-2">
+                <div className="flex items-center gap-2">
                   <BuilderSwitch label="Required" fieldName={field.name} checked={field.required}
                     onChange={(checked) => change(fields.map((item) => item.id === field.id
                       ? { ...item, required: checked, visible: checked || item.visible } : item))} />
-                  <BuilderSwitch label="Show in Form" fieldName={field.name} checked={field.visible !== false}
+                  <BuilderSwitch label="Show" fieldName={field.name} checked={field.visible !== false}
                     disabled={Boolean(coreField(field) && field.required)}
                     onChange={(checked) => change(fields.map((item) => item.id === field.id
                       ? { ...item, visible: checked, required: checked && item.required } : item))} />
                 </div>
-                <div className="flex flex-wrap gap-1">
-                  <button type="button" className={builderButton} disabled={index === 0} aria-label={`Move ${field.name} up`} onClick={() => move(index, -1)}>Up</button>
-                  <button type="button" className={builderButton} disabled={index === sectionFields.length - 1} aria-label={`Move ${field.name} down`} onClick={() => move(index, 1)}>Down</button>
-                  <button type="button" className={builderButton} onClick={() => openField(field)}>Edit</button>
-                  {!coreField(field) && <button type="button" className={builderButton} onClick={() => change(fields.filter((item) => item.id !== field.id))}>Delete</button>}
+                <div className="flex shrink-0 gap-1">
+                  <button type="button" className={rowButton} disabled={index === 0} aria-label={`Move ${field.name} up`} onClick={() => move(index, -1)}><ChevronUp size={14} /></button>
+                  <button type="button" className={rowButton} disabled={index === sectionFields.length - 1} aria-label={`Move ${field.name} down`} onClick={() => move(index, 1)}><ChevronDown size={14} /></button>
+                  <button type="button" className={rowButton} onClick={() => openField(field)}>Edit</button>
+                  {!coreField(field) && <button type="button" className={rowButton} onClick={() => change(fields.filter((item) => item.id !== field.id))}>Delete</button>}
                 </div>
               </div>
             </article>
           ))}
           {!sectionFields.length && <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">No fields in this section.</p>}
+          </div>
         </section>
 
-        <aside className="rounded-lg border border-blue-100 bg-white p-4" aria-label="Live form preview">
+        <aside className="flex min-h-0 min-w-0 flex-col rounded-lg border border-blue-100 bg-white p-3" aria-label="Live form preview">
           <h2 className="font-semibold text-blue-950">Live Form Preview</h2>
-          <p className="my-3 rounded-md bg-blue-50 p-3 text-sm text-blue-900">
+          <p className="my-2 rounded-md bg-blue-50 p-2 text-xs text-blue-900">
             Interactive Preview — Changes apply to live forms once you click Publish Form Changes
           </p>
+          <div className="min-h-0 overflow-y-auto overscroll-contain">
           <h3 className="text-sm font-semibold text-slate-800">{activeSection?.label}</h3>
           {visibleFields.length ? (
             <OfficeCustomFieldsGrid
@@ -1368,6 +1389,7 @@ export function RegistryFormCustomizationView() {
               onChange={(id, value) => setPreviewValues((previous) => ({ ...previous, [id]: value }))}
             />
           ) : <p className="mt-3 text-sm text-slate-600">No fields are visible in this section.</p>}
+          </div>
         </aside>
       </div>
 

@@ -1,3 +1,4 @@
+import { formatRegistryDate, formatRegistryName, readRegistryPreferences, readReportIdentity } from '../data/registryPreferences';
 import * as XLSX from 'xlsx';
 import {
   Document,
@@ -58,15 +59,7 @@ const parseFarmerName = (parcel: FarmParcel) => {
   return { family, given, middle };
 };
 
-const formatBday = (bday?: string) => {
-  if (!bday) return '';
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(bday)) return bday;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(bday)) {
-    const [y, m, d] = bday.split('-');
-    return `${m}/${d}/${y}`;
-  }
-  return bday;
-};
+const formatBday = (value?: string) => value ? formatRegistryDate(value, readRegistryPreferences().dateFormat) : '';
 
 const downloadBlob = (blob: Blob, fileName: string) => {
   const url = URL.createObjectURL(blob);
@@ -705,10 +698,11 @@ export const createOfficialLetterheadParagraphs = (options?: {
   office?: string;
   showDivider?: boolean;
 }): Paragraph[] => {
-  const country = options?.country || 'Republic of the Philippines';
-  const province = options?.province || 'Province of Southern Leyte';
-  const municipality = options?.municipality || 'MUNICIPALITY OF SILAGO';
-  const office = options?.office || 'MUNICIPAL AGRICULTURE OFFICE';
+  const identity = readReportIdentity();
+  const country = options?.country || identity.republic;
+  const province = options?.province || identity.province;
+  const municipality = options?.municipality || identity.municipality;
+  const office = options?.office || identity.office;
   const showDivider = options?.showDivider !== false;
 
   return [
@@ -859,13 +853,13 @@ export const exportRegistryTableExcel = (
   };
 
   const dataRows: (string | number)[][] = [
-    ['REPUBLIC OF THE PHILIPPINES'],
-    ['PROVINCE OF SOUTHERN LEYTE'],
-    ['MUNICIPALITY OF SILAGO'],
-    ['OFFICE OF THE MUNICIPAL AGRICULTURIST'],
+    [readReportIdentity().republic],
+    [readReportIdentity().province],
+    [readReportIdentity().municipality],
+    [readReportIdentity().office],
     [''],
     ['OFFICIAL REGISTRY SYSTEM FOR BASIC SECTORS IN AGRICULTURE (RSBSA) - RICE MASTERLIST'],
-    [`COVERAGE: ${selectedBarangay === 'ALL' ? 'ALL BARANGAYS' : `BARANGAY ${selectedBarangay.toUpperCase()}`}`],
+    [`COVERAGE: ${selectedBarangay === 'ALL' ? 'ALL BARANGAYS' : `BARANGAY ${selectedBarangay.toUpperCase()}`} · ${readRegistryPreferences().activeSeason}`],
     [`DATE ISSUED: ${reportDate} | MEMO REF: ${memoRef}`],
     [''],
     colKeys.map((k) => headerLabels[k])
@@ -883,7 +877,7 @@ export const exportRegistryTableExcel = (
 
     const rowObj: Record<string, string | number> = {
       rsbsaNo: p.swineNameOrId || '',
-      farmerName: family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || ''),
+      farmerName: formatRegistryName(family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || ''), readRegistryPreferences().uppercaseNames),
       familyName: family,
       givenName: given,
       middleName: middle,
@@ -905,7 +899,7 @@ export const exportRegistryTableExcel = (
   dataRows.push(['']);
   const summaryRow = colKeys.map((k) => {
     if (k === colKeys[0]) return 'TOTAL RECORD COUNT: ' + parcels.length;
-    if (k === 'farmArea') return `TOTAL AREA: ${totalArea.toFixed(2)} ha`;
+    if (k === 'farmArea') return `TOTAL AREA: ${totalArea.toFixed(readRegistryPreferences().areaPrecision)} ha`;
     return '';
   });
   dataRows.push(summaryRow);
@@ -1048,10 +1042,10 @@ export const exportMpcsrsExcel = (data: MpcsrsReportData) => {
 
 export const exportIrrigatorsExcel = (data: IrrigatorsDirectoryLetterData) => {
   const dataRows: (string | number)[][] = [
-    [data.republicHeader || 'REPUBLIC OF THE PHILIPPINES'],
-    [data.provinceHeader || 'PROVINCE OF SOUTHERN LEYTE'],
-    [data.municipalityHeader || 'MUNICIPALITY OF SILAGO'],
-    [data.officeHeader || 'OFFICE OF THE MUNICIPAL AGRICULTURIST'],
+    [data.republicHeader || readReportIdentity().republic],
+    [data.provinceHeader || readReportIdentity().province],
+    [data.municipalityHeader || readReportIdentity().municipality],
+    [data.officeHeader || readReportIdentity().office],
     [''],
     ['DIRECTORY OF IRRIGATORS ASSOCIATIONS & RICE PRODUCTION OVERVIEW'],
     [`TOTAL IRRIGATED AREA: ${data.totalIrrigatedAreaHa} ha`],
@@ -1117,10 +1111,10 @@ export const exportLetterExcel = (
   signatories: OfficialSignatory[]
 ) => {
   const dataRows: (string | number)[][] = [
-    [letter.republicHeader || 'REPUBLIC OF THE PHILIPPINES'],
-    [letter.provinceHeader || 'PROVINCE OF SOUTHERN LEYTE'],
-    [letter.municipalityHeader || 'MUNICIPALITY OF SILAGO'],
-    [letter.officeHeader || 'OFFICE OF THE MUNICIPAL AGRICULTURIST'],
+    [letter.republicHeader || readReportIdentity().republic],
+    [letter.provinceHeader || readReportIdentity().province],
+    [letter.municipalityHeader || readReportIdentity().municipality],
+    [letter.officeHeader || readReportIdentity().office],
     [''],
     [`MEMORANDUM REF: ${letter.memoRef || ''}`],
     [`DATE: ${letter.date || ''}`],
@@ -1199,10 +1193,10 @@ export const exportRegistryTableWord = async (
   );
 
   const letterheadParagraphs = createOfficialLetterheadParagraphs({
-    country: 'Republic of the Philippines',
-    province: 'Province of Southern Leyte',
-    municipality: 'MUNICIPALITY OF SILAGO',
-    office: 'MUNICIPAL AGRICULTURE OFFICE'
+    country: readReportIdentity().republic,
+    province: readReportIdentity().province,
+    municipality: readReportIdentity().municipality,
+    office: readReportIdentity().office
   });
 
   // Determine active visible columns and subcolumns
@@ -1572,7 +1566,7 @@ export const exportRegistryTableWord = async (
 
     const valMap: Record<string, string> = {
       rsbsaNo: p.swineNameOrId || 'NO RSBSA',
-      farmerName: family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || ''),
+      farmerName: formatRegistryName(family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || ''), readRegistryPreferences().uppercaseNames),
       familyName: family,
       givenName: given,
       middleName: middle,
@@ -1845,7 +1839,7 @@ export const exportRegistryTableWord = async (
           new Paragraph({
             children: [
               new TextRun({
-                text: `Ref No: ${memoRef}  •  Date: ${reportDate}  •  Total RSBSA Records: ${parcels.length}  •  Total Registered Area: ${totalArea.toFixed(2)} ha`,
+                text: `Ref No: ${memoRef}  •  Date: ${formatRegistryDate(reportDate, readRegistryPreferences().dateFormat)}  •  ${readRegistryPreferences().activeSeason}  •  Total RSBSA Records: ${parcels.length}  •  Total Registered Area: ${totalArea.toFixed(readRegistryPreferences().areaPrecision)} ha`,
                 italics: true,
                 size: 16,
                 font: 'Arial'
@@ -1923,10 +1917,10 @@ export const exportMpcsrsWord = async (data: MpcsrsReportData, options?: DocxPag
   );
 
   const letterheadParagraphs = createOfficialLetterheadParagraphs({
-    country: 'Republic of the Philippines',
-    province: 'Province of Southern Leyte',
-    municipality: 'MUNICIPALITY OF SILAGO',
-    office: 'MUNICIPAL AGRICULTURE OFFICE'
+    country: readReportIdentity().republic,
+    province: readReportIdentity().province,
+    municipality: readReportIdentity().municipality,
+    office: readReportIdentity().office
   });
 
   const cellBorderDef = { style: BorderStyle.SINGLE, size: 4, color: '000000' };
@@ -2187,10 +2181,10 @@ export const exportIrrigatorsWord = async (data: IrrigatorsDirectoryLetterData, 
   );
 
   const letterheadParagraphs = createOfficialLetterheadParagraphs({
-    country: data.republicHeader || 'Republic of the Philippines',
-    province: data.provinceHeader || 'Province of Southern Leyte',
-    municipality: data.municipalityHeader || 'MUNICIPALITY OF SILAGO',
-    office: data.officeHeader || 'OFFICE OF THE MUNICIPAL AGRICULTURIST'
+    country: data.republicHeader || readReportIdentity().republic,
+    province: data.provinceHeader || readReportIdentity().province,
+    municipality: data.municipalityHeader || readReportIdentity().municipality,
+    office: data.officeHeader || readReportIdentity().office
   });
 
   const cellBorderDef = { style: BorderStyle.SINGLE, size: 4, color: '000000' };
@@ -2414,10 +2408,10 @@ export const exportLetterWord = async (
   );
 
   const letterheadParagraphs = createOfficialLetterheadParagraphs({
-    country: letter.republicHeader || 'Republic of the Philippines',
-    province: letter.provinceHeader || 'Province of Southern Leyte',
-    municipality: letter.municipalityHeader || 'MUNICIPALITY OF SILAGO',
-    office: letter.officeHeader || 'OFFICE OF THE MUNICIPAL AGRICULTURIST'
+    country: letter.republicHeader || readReportIdentity().republic,
+    province: letter.provinceHeader || readReportIdentity().province,
+    municipality: letter.municipalityHeader || readReportIdentity().municipality,
+    office: letter.officeHeader || readReportIdentity().office
   });
 
   const sigs = letter.signatories && letter.signatories.length > 0 ? letter.signatories : signatories;
@@ -2575,10 +2569,10 @@ export const exportCompletePackageExcel = (
 
   // 1. Sheet: Transmittal Letter
   const letterRows: (string | number)[][] = [
-    ['REPUBLIC OF THE PHILIPPINES'],
-    ['PROVINCE OF SOUTHERN LEYTE'],
-    ['MUNICIPALITY OF SILAGO'],
-    ['OFFICE OF THE MUNICIPAL AGRICULTURIST'],
+    [readReportIdentity().republic],
+    [readReportIdentity().province],
+    [readReportIdentity().municipality],
+    [readReportIdentity().office],
     [''],
     ['OFFICIAL TRANSMITTAL MEMORANDUM'],
     [`MEMO REF: ${letter.memoRef || memoRef}`, '', `DATE: ${letter.date || reportDate}`],
@@ -2610,10 +2604,10 @@ export const exportCompletePackageExcel = (
 
   // 2. Sheet: Irrigators Directory
   const irrRows: (string | number)[][] = [
-    ['REPUBLIC OF THE PHILIPPINES'],
-    ['PROVINCE OF SOUTHERN LEYTE'],
-    ['MUNICIPALITY OF SILAGO'],
-    ['OFFICE OF THE MUNICIPAL AGRICULTURIST'],
+    [readReportIdentity().republic],
+    [readReportIdentity().province],
+    [readReportIdentity().municipality],
+    [readReportIdentity().office],
     [''],
     ['DIRECTORY OF REGISTERED IRRIGATORS ASSOCIATIONS (IA)'],
     [`MUNICIPALITY: SILAGO, SOUTHERN LEYTE | DATE: ${reportDate}`],
@@ -2738,13 +2732,13 @@ export const exportCompletePackageExcel = (
   };
 
   const regRows: (string | number)[][] = [
-    ['REPUBLIC OF THE PHILIPPINES'],
-    ['PROVINCE OF SOUTHERN LEYTE'],
-    ['MUNICIPALITY OF SILAGO'],
-    ['OFFICE OF THE MUNICIPAL AGRICULTURIST'],
+    [readReportIdentity().republic],
+    [readReportIdentity().province],
+    [readReportIdentity().municipality],
+    [readReportIdentity().office],
     [''],
     ['RSBSA RICE FARM MASTERLIST & GIS LANDHOLDINGS REGISTRY'],
-    [`COVERAGE: ${selectedBarangay === 'ALL' ? 'ALL BARANGAYS' : `BARANGAY ${selectedBarangay.toUpperCase()}`}`],
+    [`COVERAGE: ${selectedBarangay === 'ALL' ? 'ALL BARANGAYS' : `BARANGAY ${selectedBarangay.toUpperCase()}`} · ${readRegistryPreferences().activeSeason}`],
     [`DATE ISSUED: ${reportDate} | MEMO REF: ${memoRef}`],
     [''],
     colKeys.map((k) => headerLabels[k])
@@ -2762,7 +2756,7 @@ export const exportCompletePackageExcel = (
 
     const rowObj: Record<string, string | number> = {
       rsbsaNo: p.swineNameOrId || '',
-      farmerName: family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || ''),
+      farmerName: formatRegistryName(family && given ? `${family}, ${given}${middle ? ` ${middle}` : ''}` : (p.raiserName || ''), readRegistryPreferences().uppercaseNames),
       familyName: family,
       givenName: given,
       middleName: middle,
@@ -2783,7 +2777,7 @@ export const exportCompletePackageExcel = (
   regRows.push(['']);
   const summaryRow = colKeys.map((k) => {
     if (k === colKeys[0]) return 'TOTAL RECORD COUNT: ' + parcels.length;
-    if (k === 'farmArea') return `TOTAL AREA: ${totalArea.toFixed(2)} ha`;
+    if (k === 'farmArea') return `TOTAL AREA: ${totalArea.toFixed(readRegistryPreferences().areaPrecision)} ha`;
     return '';
   });
   regRows.push(summaryRow);
@@ -2844,10 +2838,10 @@ export const exportCompletePackageWord = async (
   );
 
   const letterheadParagraphs = createOfficialLetterheadParagraphs({
-    country: letter.republicHeader || 'Republic of the Philippines',
-    province: letter.provinceHeader || 'Province of Southern Leyte',
-    municipality: letter.municipalityHeader || 'MUNICIPALITY OF SILAGO',
-    office: letter.officeHeader || 'OFFICE OF THE MUNICIPAL AGRICULTURIST'
+    country: letter.republicHeader || readReportIdentity().republic,
+    province: letter.provinceHeader || readReportIdentity().province,
+    municipality: letter.municipalityHeader || readReportIdentity().municipality,
+    office: letter.officeHeader || readReportIdentity().office
   });
 
   const letterSigs = letter.signatories && letter.signatories.length > 0 ? letter.signatories : signatories;

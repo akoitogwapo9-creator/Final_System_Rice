@@ -1,3 +1,4 @@
+import { RegistryPreferences, REGISTRY_PREFERENCES_KEY, normalizeRegistryPreferences, readRegistryPreferences } from '../data/registryPreferences';
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { User, FarmParcel, Language, BackgroundPreset, LftAccount, SeasonalProductionRecord, OfficeContactInfo, PortalTab, MunicipalBrandingSettings, LandingPageConfig, MandateCardItem, GovernmentSubsidyProgram, SubsidyCategory, SubsidyClaimRecord, SubsidyHistoryEntry, isAccountActive } from '../types';
 import { BARANGAYS, BARANGAY_CLASSIFICATIONS, BarangayProfiles, getAssignedLftForBarangay, isUserAuthorizedForBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
@@ -167,6 +168,11 @@ export const DEFAULT_LANDING_PAGE_CONFIG: LandingPageConfig = {
   footerPortalAccessBtn: 'Return to Portal',
   footerCopyright: '© 2026 Municipality of Silago · Office of the Municipal Agriculturist'
 };
+
+const SETTINGS_QUEUE_KEY = 'silago_pending_admin_settings';
+function readSettingsQueue(): Record<string, unknown> {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_QUEUE_KEY) || '{}') || {}; } catch { return {}; }
+}
 
 const DEFAULT_ECOSYSTEMS = [
   'Irrigated Lowland (NIA)',
@@ -397,6 +403,8 @@ interface AppContextType {
   deleteIrrigationAssociation: (name: string) => void;
 
   // Master-Detail Seasonal Production Management
+  registryPreferences: RegistryPreferences;
+  saveRegistryPreferences: (updates: Partial<RegistryPreferences>) => Promise<boolean>;
   activeSeason: string;
   setActiveSeason: (season: string) => void;
   addSeasonalRecord: (
@@ -418,6 +426,9 @@ interface AppContextType {
   offlineQueueCount: number;
   isOnline: boolean;
   syncOfflineQueue: () => Promise<void>;
+  flushAdminSettings: () => Promise<boolean>;
+  flushBarangayProfiles: () => Promise<boolean>;
+  getPendingSettings: () => string[];
   syncNotification: string | null;
   setSyncNotification: (msg: string | null) => void;
 
@@ -461,6 +472,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   syncPortalNavigation = true
 }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+
+  const settingsQueue = useRef(readSettingsQueue());
+  const settingsSync = useRef<Promise<boolean> | null>(null);
+  const flushAdminSettings = useCallback(async (): Promise<boolean> => {
+    if (currentUser?.role !== 'Central Admin' || !navigator.onLine) return false;
+    if (settingsSync.current) {
+      if (!await settingsSync.current) return false;
+      return Object.keys(settingsQueue.current).length ? flushAdminSettings() : true;
+    }
+    const save = async () => {
+      const entries = Object.entries(settingsQueue.current);
+      const results = await Promise.all(entries.map(async ([key, value]) => {
+        const saved = await supabaseDb.setSetting(key, value).catch(() => false);
+        if (saved && settingsQueue.current[key] === value) delete settingsQueue.current[key];
+        return saved;
+      }));
+      try { localStorage.setItem(SETTINGS_QUEUE_KEY, JSON.stringify(settingsQueue.current)); } catch {}
+      return results.every(Boolean);
+    };
+    settingsSync.current = save();
+    try { return await settingsSync.current; } finally { settingsSync.current = null; }
+  }, [currentUser?.role]);
+
+  const queueAdminSetting = useCallback((key: string, value: unknown) => {
+    if (currentUser?.role !== 'Central Admin') return;
+    settingsQueue.current[key] = value;
+    try { localStorage.setItem(SETTINGS_QUEUE_KEY, JSON.stringify(settingsQueue.current)); } catch {}
+    return flushAdminSettings();
+  }, [currentUser?.role, flushAdminSettings]);
+
+  useEffect(() => {
+    const sync = () => { void flushAdminSettings(); };
+    window.addEventListener('online', sync);
+    sync();
+    return () => window.removeEventListener('online', sync);
+  }, [flushAdminSettings]);
+
+  const [registryPreferences, setRegistryPreferences] = useState(readRegistryPreferences);
+  const activeSeason = registryPreferences.activeSeason;
+
+  const applyRegistryPreferences = useCallback((value: Partial<RegistryPreferences>) => {
+    const preferences = normalizeRegistryPreferences(value);
+    setRegistryPreferences(preferences);
+    try { localStorage.setItem(REGISTRY_PREFERENCES_KEY, JSON.stringify(preferences)); } catch {}
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const sync = async () => {
+      try {
+        if (Object.hasOwn(settingsQueue.current, REGISTRY_PREFERENCES_KEY)) return;
+        const remote = await supabaseDb.getSetting<RegistryPreferences>(REGISTRY_PREFERENCES_KEY);
+        if (active && remote && !Object.hasOwn(settingsQueue.current, REGISTRY_PREFERENCES_KEY)) applyRegistryPreferences(remote);
+      } catch {}
+    };
+    const receive = (event: StorageEvent) => {
+      if (event.key === REGISTRY_PREFERENCES_KEY && event.newValue) {
+        try { setRegistryPreferences(normalizeRegistryPreferences(JSON.parse(event.newValue))); } catch {}
+      }
+    };
+    window.addEventListener('online', sync);
+    window.addEventListener('storage', receive);
+    void sync();
+    return () => {
+      active = false;
+      window.removeEventListener('online', sync);
+      window.removeEventListener('storage', receive);
+    };
+  }, [currentUser?.role, applyRegistryPreferences]);
+
+  const saveRegistryPreferences = async (updates: Partial<RegistryPreferences>) => {
+    if (currentUser?.role !== 'Central Admin') return false;
+    const next = normalizeRegistryPreferences({ ...readRegistryPreferences(), ...updates });
+    applyRegistryPreferences(next);
+    return (await queueAdminSetting(REGISTRY_PREFERENCES_KEY, next)) === true;
+  };
+
+  const setActiveSeason = (season: string) => { void saveRegistryPreferences({ activeSeason: season }); };
 
   const [barangayProfiles, setBarangayProfiles] = useState<BarangayProfiles>(() => ({
     ...readBarangayProfiles(BARANGAY_PROFILES_KEY), ...readBarangayProfiles(PENDING_BARANGAY_PROFILES_KEY)
@@ -529,7 +618,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     const typedZone = profile.classification.trim();
     const classification = BARANGAY_CLASSIFICATIONS.find((zone) => zone.toLowerCase() === typedZone.toLowerCase()) || typedZone;
     if (!displayName || !classification || classification.length > 60) return false;
-    pendingBarangayProfiles.current[name] = { displayName, classification };
+    pendingBarangayProfiles.current[name] = { ...barangayProfiles[name], ...profile, displayName, classification };
     try { localStorage.setItem(PENDING_BARANGAY_PROFILES_KEY, JSON.stringify(pendingBarangayProfiles.current)); } catch {}
     applyBarangayProfiles(barangayProfiles);
     return flushBarangayProfiles();
@@ -833,7 +922,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     const handleOnline = () => {
       setIsOnline(true);
       if (currentUser) {
-        setSyncNotification('Network connection detected. Synchronizing offline queue...');
         void syncOfflineQueue();
       }
     };
@@ -866,7 +954,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
 
   // Handle App Settings updates from Realtime
   const handleSettingUpsert = useCallback((key: string, value: any) => {
-    if (key === BARANGAY_PROFILES_KEY && value && typeof value === 'object') applyBarangayProfiles(value);
+    if (Object.hasOwn(settingsQueue.current, key)) return;
+    if (key === REGISTRY_PREFERENCES_KEY && value) {
+      applyRegistryPreferences(value);
+    }
+    else if (key === BARANGAY_PROFILES_KEY && value && typeof value === 'object') applyBarangayProfiles(value);
     else if (key === 'silago_language') setLanguageState(value === 'CEB' ? 'CEB' : 'EN');
     else if (key === 'silago_bg_photo_url') setBgPhotoUrlState(value);
     else if (key === 'silago_bg_opacity') setBgOpacityState(Number(value));
@@ -880,7 +972,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     else if (key === 'silago_bagong_pilipinas_logo_url') { setBagongPilipinasLogoUrlState(value); try { if (value) localStorage.setItem('silago_bagong_pilipinas_logo_url', value); else localStorage.removeItem('silago_bagong_pilipinas_logo_url'); } catch {} }
     else if (key === 'silago_portal_banner_url') { setPortalBannerUrlState(value); try { if (value) localStorage.setItem('silago_portal_banner_url', value); else localStorage.removeItem('silago_portal_banner_url'); } catch {} }
     else if (key === 'silago_admin_profile' && value) setAdminProfile(value);
-    else if (key === 'silago_office_contact_info' && value) setOfficeContactInfoState(value);
+    else if (key === 'silago_office_contact_info' && value) {
+      setOfficeContactInfoState(value);
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+    }
     else if (key === 'silago_rice_varieties' && Array.isArray(value)) setVarieties(value);
     else if (key === 'silago_ecosystems' && Array.isArray(value)) setEcosystems(value);
     else if (key === 'silago_tenures' && Array.isArray(value)) setTenures(value);
@@ -940,7 +1035,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         localStorage.setItem(PARCEL_CUSTOM_FIELDS_KEY, JSON.stringify(value));
       } catch {}
     }
-  }, [applyBarangayProfiles]);
+  }, [applyBarangayProfiles, applyRegistryPreferences]);
 
   const handleSettingDelete = useCallback((key: string) => {
     if (key === 'silago_da_logo_url') { setDaLogoUrlState(null); try { localStorage.removeItem('silago_da_logo_url'); } catch {} }
@@ -1164,7 +1259,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   }, [syncWithSupabase, handleSettingUpsert, handleSettingDelete]);
 
   // Active Cropping Season (LFT Twice-a-Year Rice Production)
-  const [activeSeason, setActiveSeason] = useState<string>(ACTIVE_SEASON);
 
   const addParcel = async (parcel: FarmParcel) => {
     if (!canUserAddParcel(currentUser, parcel.barangay)) {
@@ -1220,20 +1314,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       }
     }
 
-    // 4. Format ID as 'FARMER-SLG-...'
-    const rawTag = (parcel.tagNumber || '').trim();
-    let formattedTag = rawTag;
-    if (!formattedTag) {
-      formattedTag = `FARMER-SLG-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    } else if (!formattedTag.startsWith('FARMER-SLG-')) {
-      if (formattedTag.startsWith('FARMER-')) {
-        formattedTag = `FARMER-SLG-${formattedTag.replace(/^FARMER-/, '')}`;
-      } else if (formattedTag.startsWith('SLG-')) {
-        formattedTag = `FARMER-${formattedTag}`;
-      } else {
-        formattedTag = `FARMER-SLG-${formattedTag}`;
-      }
-    }
+    const formattedTag = parcel.tagNumber?.trim() || `${registryPreferences.parcelPrefix}-${Date.now().toString(36).toUpperCase()}`;
 
     const validatedParcel = normalizeParcelNames({ ...parcel, tagNumber: formattedTag, contactNumber: sanitizedContact });
 
@@ -1481,8 +1562,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         localStorage.setItem('silago_language', lang);
       }
     } catch {}
-    if (currentUser?.role === 'Central Admin') void supabaseDb.setSetting('silago_language', lang);
-  }, [currentUser?.role]);
+    if (currentUser?.role === 'Central Admin') void queueAdminSetting('silago_language', lang);
+  }, [currentUser?.role, queueAdminSetting]);
 
   const t = useCallback((keyPath: string, fallback?: string): string => {
     return getTranslation(language, keyPath, fallback);
@@ -1534,33 +1615,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     if (currentUser?.role !== 'Central Admin') return;
     setBgPhotoUrlState(url);
     setBgActiveState(true);
-    supabaseDb.setSetting('silago_bg_photo_url', url);
-    supabaseDb.setSetting('silago_bg_active', 'true');
+    queueAdminSetting('silago_bg_photo_url', url);
+    queueAdminSetting('silago_bg_active', 'true');
     addToBackgroundHistory(url, name, source);
   };
 
   const setBgOpacity = (val: number) => {
     if (currentUser?.role !== 'Central Admin') return;
     setBgOpacityState(val);
-    supabaseDb.setSetting('silago_bg_opacity', val);
+    queueAdminSetting('silago_bg_opacity', val);
   };
 
   const setBgBlur = (val: number) => {
     if (currentUser?.role !== 'Central Admin') return;
     setBgBlurState(val);
-    supabaseDb.setSetting('silago_bg_blur', val);
+    queueAdminSetting('silago_bg_blur', val);
   };
 
   const setBgActive = (val: boolean) => {
     if (currentUser?.role !== 'Central Admin') return;
     setBgActiveState(val);
-    supabaseDb.setSetting('silago_bg_active', val);
+    queueAdminSetting('silago_bg_active', val);
   };
 
   const removeBgPhoto = () => {
     if (currentUser?.role !== 'Central Admin') return;
     setBgActiveState(false);
-    supabaseDb.setSetting('silago_bg_active', false);
+    queueAdminSetting('silago_bg_active', false);
   };
 
   // Logos Settings (Synchronously Hydrated from LocalStorage + Supabase Cloud)
@@ -1590,7 +1671,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       if (url) localStorage.setItem('silago_da_logo_url', url);
       else localStorage.removeItem('silago_da_logo_url');
     } catch {}
-    if (url) supabaseDb.setSetting('silago_da_logo_url', url);
+    if (url) queueAdminSetting('silago_da_logo_url', url);
     else supabaseDb.removeSetting('silago_da_logo_url');
   };
 
@@ -1601,7 +1682,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       if (url) localStorage.setItem('silago_seal_url', url);
       else localStorage.removeItem('silago_seal_url');
     } catch {}
-    if (url) supabaseDb.setSetting('silago_seal_url', url);
+    if (url) queueAdminSetting('silago_seal_url', url);
     else supabaseDb.removeSetting('silago_seal_url');
   };
 
@@ -1612,7 +1693,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       if (url) localStorage.setItem('silago_bag_ong_logo_url', url);
       else localStorage.removeItem('silago_bag_ong_logo_url');
     } catch {}
-    if (url) supabaseDb.setSetting('silago_bag_ong_logo_url', url);
+    if (url) queueAdminSetting('silago_bag_ong_logo_url', url);
     else supabaseDb.removeSetting('silago_bag_ong_logo_url');
   };
 
@@ -1823,21 +1904,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   const [settingsActiveSubTab, setSettingsActiveSubTab] = useState<'profile' | 'municipal' | 'featured_card' | 'display' | 'media' | 'landing'>('media');
 
   // Office Hours & Hotline Settings (Central Admin Managed)
-  const [officeContactInfo, setOfficeContactInfoState] = useState<OfficeContactInfo>(DEFAULT_OFFICE_CONTACT_INFO);
+  const [officeContactInfo, setOfficeContactInfoState] = useState<OfficeContactInfo>(() => {
+    try { return { ...DEFAULT_OFFICE_CONTACT_INFO, ...JSON.parse(localStorage.getItem('silago_office_contact_info') || '{}') }; }
+    catch { return DEFAULT_OFFICE_CONTACT_INFO; }
+  });
 
   const updateOfficeContactInfo = (info: Partial<OfficeContactInfo>) => {
     if (currentUser?.role !== 'Central Admin') return;
-    setOfficeContactInfoState((prev) => {
-      const updated = { ...prev, ...info };
-      supabaseDb.setSetting('silago_office_contact_info', updated);
-      return updated;
-    });
+    const updated = { ...officeContactInfo, ...info };
+    try { localStorage.setItem('silago_office_contact_info', JSON.stringify(updated)); } catch {}
+    setOfficeContactInfoState(updated);
+    void queueAdminSetting('silago_office_contact_info', updated);
   };
 
   const resetOfficeContactInfo = () => {
     if (currentUser?.role !== 'Central Admin') return;
     setOfficeContactInfoState(DEFAULT_OFFICE_CONTACT_INFO);
-    supabaseDb.setSetting('silago_office_contact_info', DEFAULT_OFFICE_CONTACT_INFO);
+    localStorage.removeItem('silago_office_contact_info');
+    queueAdminSetting('silago_office_contact_info', DEFAULT_OFFICE_CONTACT_INFO);
   };
 
   // Municipal Branding & System Identification Settings
@@ -1856,26 +1940,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
 
   const updateMunicipalBranding = (branding: Partial<MunicipalBrandingSettings>) => {
     if (currentUser?.role !== 'Central Admin') return;
-    setMunicipalBrandingState((prev) => {
-      const updated = { ...prev, ...branding };
-      try {
-        localStorage.setItem('silago_municipal_branding', JSON.stringify(updated));
-      } catch {}
-      supabaseDb.setSetting('silago_municipal_branding', updated);
+    const updated = { ...municipalBranding, ...branding };
+    try {
+      localStorage.setItem('silago_municipal_branding', JSON.stringify(updated));
+    } catch {}
+    setMunicipalBrandingState(updated);
+    void queueAdminSetting('silago_municipal_branding', updated);
 
-      // Keep legacy seal and logo states synchronized
-      if (branding.silagoSealUrl !== undefined) {
-        setSilagoLogoUrl(branding.silagoSealUrl);
-      }
-      if (branding.bagOngSilagoLogoUrl !== undefined) {
-        setBagOngSilagoLogoUrl(branding.bagOngSilagoLogoUrl);
-      }
-      if (branding.daLogoUrl !== undefined) {
-        setDaLogoUrl(branding.daLogoUrl);
-      }
-
-      return updated;
-    });
+    // Keep legacy seal and logo states synchronized
+    if (branding.silagoSealUrl !== undefined) {
+      setSilagoLogoUrl(branding.silagoSealUrl);
+    }
+    if (branding.bagOngSilagoLogoUrl !== undefined) {
+      setBagOngSilagoLogoUrl(branding.bagOngSilagoLogoUrl);
+    }
+    if (branding.daLogoUrl !== undefined) {
+      setDaLogoUrl(branding.daLogoUrl);
+    }
   };
 
   const resetMunicipalBranding = () => {
@@ -1884,7 +1965,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     try {
       localStorage.removeItem('silago_municipal_branding');
     } catch {}
-    supabaseDb.setSetting('silago_municipal_branding', DEFAULT_MUNICIPAL_BRANDING);
+    queueAdminSetting('silago_municipal_branding', DEFAULT_MUNICIPAL_BRANDING);
     setSilagoLogoUrl(null);
     setBagOngSilagoLogoUrl(null);
     setDaLogoUrl(null);
@@ -1912,14 +1993,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
 
   const updateLandingPageConfig = (config: Partial<LandingPageConfig>) => {
     if (currentUser?.role !== 'Central Admin') return;
-    setLandingPageConfigState((prev) => {
-      const updated = { ...prev, ...config };
-      try {
-        localStorage.setItem('silago_landing_page_config', JSON.stringify(updated));
-      } catch {}
-      supabaseDb.setSetting('silago_landing_page_config', updated);
-      return updated;
-    });
+    const updated = { ...landingPageConfig, ...config };
+    try {
+      localStorage.setItem('silago_landing_page_config', JSON.stringify(updated));
+    } catch {}
+    setLandingPageConfigState(updated);
+    void queueAdminSetting('silago_landing_page_config', updated);
   };
 
   const resetLandingPageConfig = () => {
@@ -1928,7 +2007,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     try {
       localStorage.removeItem('silago_landing_page_config');
     } catch {}
-    supabaseDb.setSetting('silago_landing_page_config', DEFAULT_LANDING_PAGE_CONFIG);
+    queueAdminSetting('silago_landing_page_config', DEFAULT_LANDING_PAGE_CONFIG);
   };
 
   // Official Legal Decrees & Ordinances Registry (Visible in both Portal & Public Interface)
@@ -2234,7 +2313,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       try {
         localStorage.setItem('silago_landing_page_config', JSON.stringify(updated));
       } catch {}
-      supabaseDb.setSetting('silago_landing_page_config', updated);
+      queueAdminSetting('silago_landing_page_config', updated);
       return updated;
     });
   };
@@ -2250,7 +2329,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       try {
         localStorage.setItem('silago_landing_page_config', JSON.stringify(nextConfig));
       } catch {}
-      supabaseDb.setSetting('silago_landing_page_config', nextConfig);
+      queueAdminSetting('silago_landing_page_config', nextConfig);
       return nextConfig;
     });
   };
@@ -2266,7 +2345,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       try {
         localStorage.setItem('silago_landing_page_config', JSON.stringify(nextConfig));
       } catch {}
-      supabaseDb.setSetting('silago_landing_page_config', nextConfig);
+      queueAdminSetting('silago_landing_page_config', nextConfig);
       return nextConfig;
     });
   };
@@ -2274,7 +2353,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   const setSlsuPhotoUrl = (url: string) => {
     if (currentUser?.role !== 'Central Admin') return;
     setSlsuPhotoUrlState(url);
-    supabaseDb.setSetting('silago_slsu_photo_url', url);
+    queueAdminSetting('silago_slsu_photo_url', url);
   };
   const setSlsuLayoutMode = (mode: 'banner' | 'full' | 'seal') => {
     if (currentUser?.role !== 'Central Admin') return;
@@ -2284,7 +2363,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   const setSlsuCaption = (cap: string) => {
     if (currentUser?.role !== 'Central Admin') return;
     setSlsuCaptionState(cap);
-    supabaseDb.setSetting('silago_slsu_caption', cap);
+    queueAdminSetting('silago_slsu_caption', cap);
   };
   const setSlsuSealLogoUrl = (url: string | null) => {
     if (currentUser?.role !== 'Central Admin') return;
@@ -2300,7 +2379,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   const setSlsuMotto = (motto: string) => {
     if (currentUser?.role !== 'Central Admin') return;
     setSlsuMottoState(motto);
-    supabaseDb.setSetting('silago_slsu_motto', motto);
+    queueAdminSetting('silago_slsu_motto', motto);
   };
   const setSlsuYear = (year: string) => {
     if (currentUser?.role !== 'Central Admin') return;
@@ -2310,12 +2389,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   const setSlsuCenterTitle = (title: string) => {
     if (currentUser?.role !== 'Central Admin') return;
     setSlsuCenterTitleState(title);
-    supabaseDb.setSetting('silago_slsu_center_title', title);
+    queueAdminSetting('silago_slsu_center_title', title);
   };
   const setSlsuCenterSubtitle = (sub: string) => {
     if (currentUser?.role !== 'Central Admin') return;
     setSlsuCenterSubtitleState(sub);
-    supabaseDb.setSetting('silago_slsu_center_subtitle', sub);
+    queueAdminSetting('silago_slsu_center_subtitle', sub);
   };
   const setSlsuBadgeTag = (tag: string) => {
     if (currentUser?.role !== 'Central Admin') return;
@@ -2577,7 +2656,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
 
         if (!isMounted) return;
 
-        if (cloudLang) setLanguageState(cloudLang === 'CEB' ? 'CEB' : 'EN');
+        if (cloudLang && !Object.hasOwn(settingsQueue.current, 'silago_language')) setLanguageState(cloudLang === 'CEB' ? 'CEB' : 'EN');
         if (cloudBgPhoto) setBgPhotoUrlState(cloudBgPhoto);
         if (cloudBgOpacity !== null && cloudBgOpacity !== undefined) setBgOpacityState(Number(cloudBgOpacity));
         if (cloudBgBlur !== null && cloudBgBlur !== undefined) setBgBlurState(Number(cloudBgBlur));
@@ -2590,7 +2669,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         if (cloudBagongPilipinas) { setBagongPilipinasLogoUrlState(cloudBagongPilipinas); try { localStorage.setItem('silago_bagong_pilipinas_logo_url', cloudBagongPilipinas); } catch {} }
         if (cloudPortalBanner) { setPortalBannerUrlState(cloudPortalBanner); try { localStorage.setItem('silago_portal_banner_url', cloudPortalBanner); } catch {} }
         if (cloudAdminProfile) setAdminProfile(cloudAdminProfile);
-        if (cloudOfficeContact) setOfficeContactInfoState(cloudOfficeContact);
+        if (cloudOfficeContact && !Object.hasOwn(settingsQueue.current, 'silago_office_contact_info')) handleSettingUpsert('silago_office_contact_info', cloudOfficeContact);
         if (Array.isArray(cloudVarieties) && cloudVarieties.length > 0) setVarieties(mergeRequiredRiceVarieties(cloudVarieties));
         if (Array.isArray(cloudEcosystems) && cloudEcosystems.length > 0) setEcosystems(cloudEcosystems);
         if (Array.isArray(cloudTenures) && cloudTenures.length > 0) setTenures(cloudTenures);
@@ -2604,14 +2683,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         if (cloudSlsuSubtitle) setSlsuCenterSubtitleState(cloudSlsuSubtitle);
         if (cloudSlsuBadge) setSlsuBadgeTagState(cloudSlsuBadge);
         if (cloudSlsuTags) setSlsuTopTagsState(cloudSlsuTags);
-        if (cloudMunicipalBranding) {
+        if (cloudMunicipalBranding && !Object.hasOwn(settingsQueue.current, 'silago_municipal_branding')) {
           setMunicipalBrandingState((prev) => ({ ...prev, ...cloudMunicipalBranding }));
           try { localStorage.setItem('silago_municipal_branding', JSON.stringify(cloudMunicipalBranding)); } catch {}
           if (cloudMunicipalBranding.silagoSealUrl) setSilagoLogoUrlState(cloudMunicipalBranding.silagoSealUrl);
           if (cloudMunicipalBranding.bagOngSilagoLogoUrl) setBagOngSilagoLogoUrlState(cloudMunicipalBranding.bagOngSilagoLogoUrl);
           if (cloudMunicipalBranding.daLogoUrl) setDaLogoUrlState(cloudMunicipalBranding.daLogoUrl);
         }
-        if (cloudLandingPageConfig) {
+        if (cloudLandingPageConfig && !Object.hasOwn(settingsQueue.current, 'silago_landing_page_config')) {
           const mergedLanding: LandingPageConfig = {
             ...DEFAULT_LANDING_PAGE_CONFIG,
             ...cloudLandingPageConfig,
@@ -2799,6 +2878,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         updateIrrigationAssociation,
         deleteIrrigationAssociation,
         // Master-Detail Seasonal Production
+        registryPreferences,
+        saveRegistryPreferences,
         activeSeason,
         setActiveSeason,
         addSeasonalRecord,
@@ -2812,6 +2893,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         offlineQueueCount,
         isOnline,
         syncOfflineQueue,
+        flushAdminSettings,
+        flushBarangayProfiles,
+        getPendingSettings: () => [
+          ...Object.keys(settingsQueue.current),
+          ...Object.keys(pendingBarangayProfiles.current).map((name) => `Barangay · ${name}`)
+        ],
         syncNotification,
         setSyncNotification,
         // Navigation Tab State

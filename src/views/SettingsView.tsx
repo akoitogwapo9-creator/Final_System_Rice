@@ -1,10 +1,11 @@
+import { DEFAULT_REGISTRY_PREFERENCES, MAP_LAYER_OPTIONS, normalizeRegistryPreferences, RegistryPreferences } from '../data/registryPreferences';
 import React, { useState, useRef, useEffect } from 'react';
-import { useApp } from '../context/AppContext';
+import { DEFAULT_LANDING_PAGE_CONFIG, DEFAULT_MUNICIPAL_BRANDING, DEFAULT_OFFICE_CONTACT_INFO, useApp } from '../context/AppContext';
 import { SilagoSeal, DaLogo, BagOngSilagoLogo, SlsuBadge, OfficialSealsTrio } from '../components/Seals';
-import { PhotosView } from './PhotosView';
+import { MediaSettingsActions, PhotosView } from './PhotosView';
 import { HeroBackgroundEditor, HeroBgPatch } from '../components/HeroBackgroundEditor';
 import { SLSU_EXTENSION_PRESETS, DEFAULT_SLSU_PHOTO } from '../data/photos';
-import { uploadFarmPhoto, supabaseDb } from '../utils/supabaseClient';
+import { getOfflinePendingFarms, uploadFarmPhoto, supabaseDb } from '../utils/supabaseClient';
 import { LandingPageConfig, MandateCardItem } from '../types';
 import {
   Settings as SettingsIcon,
@@ -51,13 +52,13 @@ interface SettingsViewProps {
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding }) => {
   const {
-    currentUser,
+    currentUser, registryPreferences, saveRegistryPreferences, seasons, isOnline, isRealtimeSyncing, offlineQueueCount, syncOfflineQueue, syncWithSupabase, resetParcels, flushAdminSettings, flushBarangayProfiles, getPendingSettings,
     updateCurrentUserProfile,
     updateCurrentUserPassword,
     adminProfile,
     updateAdminProfile,
     parcels,
-    lftAccounts,
+    lftAccounts, barangayProfiles, legalDecrees, subsidyPrograms, subsidyClaims, subsidyHistory,
     language,
     setLanguage,
     slsuBadgeTag,
@@ -95,7 +96,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
 
   const isCentralAdmin = currentUser?.role === 'Central Admin';
 
-  const [activeSubTab, setActiveSubTab] = useState<'profile' | 'municipal' | 'featured_card' | 'display' | 'media' | 'landing'>(() => {
+  const [activeSubTab, setActiveSubTab] = useState<'profile' | 'municipal' | 'featured_card' | 'display' | 'media' | 'landing' | 'gis' | 'maintenance'>(() => {
     return settingsActiveSubTab === 'featured_card' || settingsActiveSubTab === 'profile' ? 'media' : settingsActiveSubTab || 'landing';
   });
 
@@ -105,7 +106,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
     }
   }, [settingsActiveSubTab]);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [mediaAssetTab, setMediaAssetTab] = useState<'all' | 'background' | 'slsu' | 'seals'>('background');
+  const mediaActions = useRef<MediaSettingsActions>(null);
+  const [settingsDraft, setSettingsDraft] = useState(registryPreferences);
+  const [languageDraft, setLanguageDraft] = useState(language);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [queueVisible, setQueueVisible] = useState(false);
+  const loadedPreferences = useRef(registryPreferences);
+  useEffect(() => {
+    const previous = loadedPreferences.current;
+    loadedPreferences.current = registryPreferences;
+    setSettingsDraft((draft) => Object.fromEntries(
+      (Object.keys(registryPreferences) as (keyof RegistryPreferences)[]).map((key) => [
+        key, Object.is(draft[key], previous[key]) ? registryPreferences[key] : draft[key]
+      ])
+    ) as unknown as RegistryPreferences);
+  }, [registryPreferences]);
+  useEffect(() => setLanguageDraft(language), [language]);
+
+  const changePreference = <K extends keyof RegistryPreferences>(key: K, value: RegistryPreferences[K]) =>
+    setSettingsDraft((previous) => ({ ...previous, [key]: value }));
+
 
   // Landing Page Configuration Form State
   const [landingForm, setLandingForm] = useState<LandingPageConfig>(() => ({
@@ -1180,8 +1200,96 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
     );
   }
 
+  const preferenceGroups = {
+    municipal: ['activeSeason', 'agriculturistName', 'agriculturistTitle'],
+    landing: ['showAnnouncement', 'showBarangayDirectory', 'showLegalRepository'],
+    gis: ['mapLayer', 'mapLatitude', 'mapLongitude', 'mapZoom', 'areaPrecision', 'parcelPrefix'],
+    display: ['dateFormat', 'uppercaseNames']
+  } as const;
+  const settingsTabs = [
+    ['municipal', 'Municipal Registry & Office Setup'],
+    ['landing', 'Landing Page & Public Portal'],
+    ['media', 'Branding, Seals & Media'],
+    ['gis', 'GIS Map & Registry Defaults'],
+    ['maintenance', 'Data Sync, Backup & Maintenance'],
+    ['display', 'Language & Interface Preferences']
+  ] as const;
+  const preferenceKeys = activeSubTab in preferenceGroups
+    ? preferenceGroups[activeSubTab as keyof typeof preferenceGroups] : [];
+  const inputStyle = 'mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900';
+  const panelStyle = 'space-y-4 rounded-xl border border-blue-100 bg-white p-4 shadow-sm';
+  const actionStyle = 'rounded-md border border-blue-200 px-3 py-2 text-sm font-semibold text-blue-800 hover:bg-blue-50 disabled:opacity-50';
+  const pendingSettings = activeSubTab === 'maintenance' ? getPendingSettings() : [];
+  const resetSettingsDraft = () => {
+    const defaults = Object.fromEntries(preferenceKeys.map((key) => [key, DEFAULT_REGISTRY_PREFERENCES[key]]));
+    setSettingsDraft((previous) => ({ ...previous, ...defaults }));
+    if (activeSubTab === 'municipal') {
+      setBrandingForm({ ...brandingForm, ...DEFAULT_MUNICIPAL_BRANDING, silagoSealUrl: brandingForm.silagoSealUrl, bagOngSilagoLogoUrl: brandingForm.bagOngSilagoLogoUrl, daLogoUrl: brandingForm.daLogoUrl });
+      setContactForm(DEFAULT_OFFICE_CONTACT_INFO);
+    }
+    if (activeSubTab === 'landing') setLandingForm(DEFAULT_LANDING_PAGE_CONFIG);
+    if (activeSubTab === 'display') setLanguageDraft('EN');
+    if (activeSubTab === 'media') { mediaActions.current?.reset(); return; }
+    showToast('success', 'Defaults loaded. Save All Changes to apply them.');
+  };
+
+  const saveSettings = async () => {
+    if (!isCentralAdmin) return;
+    if (activeSubTab === 'media') { mediaActions.current?.save(); return; }
+    setSavingSettings(true);
+    try {
+      if (activeSubTab === 'municipal') {
+        updateMunicipalBranding(brandingForm);
+        updateOfficeContactInfo(contactForm);
+      }
+      if (activeSubTab === 'landing') updateLandingPageConfig(landingForm);
+      if (activeSubTab === 'display') setLanguage(languageDraft);
+      const normalized = normalizeRegistryPreferences(settingsDraft);
+      const changes = Object.fromEntries(preferenceKeys.map((key) => [key, normalized[key]]));
+      setSettingsDraft((draft) => ({ ...draft, ...changes }));
+      const synced = await saveRegistryPreferences(changes);
+      const contentSynced = await flushAdminSettings();
+      showToast('success', synced && contentSynced ? 'Settings saved.' : 'Settings saved on this device. Cloud sync is pending.');
+    } catch {
+      showToast('error', 'Settings could not be saved. Please try again.');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const syncSettings = async () => {
+    setSavingSettings(true);
+    try {
+      await syncOfflineQueue();
+      await syncWithSupabase();
+      const settingsSynced = await flushAdminSettings();
+      const profilesSynced = await flushBarangayProfiles();
+      const pending = getOfflinePendingFarms().length;
+      showToast('success', pending || !settingsSynced || !profilesSynced ? 'Sync checked. Some updates are still pending.' : 'Sync check complete.');
+    } catch {
+      showToast('error', 'Sync could not finish. Please try again.');
+    } finally { setSavingSettings(false); }
+  };
+
+  const exportBackup = (format: 'json' | 'csv') => {
+    const csvCell = (value: unknown) => {
+      const field = value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return '"' + (/^[=+@\-]/.test(field) && typeof value !== 'number' ? "'" : '') + field.replace(/"/g, '""') + '"';
+    };
+    const columns = [...new Set(parcels.flatMap((parcel) => Object.keys(parcel)))];
+    const body = format === 'json'
+      ? JSON.stringify({ exportedAt: new Date().toISOString(), parcels, preferences: registryPreferences, barangayProfiles, municipalBranding, officeContactInfo, landingPageConfig, legalDecrees, subsidyPrograms, subsidyClaims, subsidyHistory, pendingFarms: getOfflinePendingFarms() }, null, 2)
+      : [columns.map(csvCell).join(','), ...parcels.map((parcel) => columns.map((key) => csvCell(parcel[key as keyof typeof parcel])).join(','))].join('\r\n');
+    const url = URL.createObjectURL(new Blob([body], { type: format === 'json' ? 'application/json' : 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `silago-registry-backup.${format}`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {/* Hidden File Input for Avatar */}
       <input
         type="file"
@@ -1205,112 +1313,83 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
         </div>
       )}
 
-      {/* 1. Header Banner matching System Theme */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 space-y-5">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-800 flex items-center justify-center shrink-0 ring-1 ring-emerald-100">
-              <SettingsIcon className="w-6 h-6" />
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-widest bg-emerald-50 text-emerald-800 border border-emerald-100 px-2.5 py-0.5 rounded-md">
-                  ADMINISTRATION &amp; SECURITY
-                </span>
-                <span className="text-[10px] font-semibold text-slate-600 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-200">
-                  Active Central Authority
-                </span>
-              </div>
-              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
-                  Settings
-              </h2>
-              <p className="text-sm text-slate-500 max-w-2xl leading-relaxed">
-                Manage registry details, media and branding, and language preferences.
-              </p>
-            </div>
-          </div>
-
+      <section className="sticky top-[52px] z-20 space-y-2 rounded-xl border border-blue-100 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="text-lg font-bold text-blue-950">Settings</h1>
+          {activeSubTab !== 'maintenance' && <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={resetSettingsDraft} className={actionStyle}>Reset Defaults</button>
+            <button type="button" disabled={savingSettings} onClick={saveSettings} className="rounded-md bg-blue-700 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-50">{savingSettings ? 'Saving…' : 'Save All Changes'}</button>
+          </div>}
         </div>
+        <nav aria-label="Settings sections" className="grid grid-cols-2 gap-1 lg:grid-cols-3">
+          {settingsTabs.map(([id, label]) => <button key={id} type="button" aria-pressed={activeSubTab === id} onClick={() => {
+            setActiveSubTab(id);
+            if (id !== 'gis' && id !== 'maintenance') setSettingsActiveSubTab(id);
+          }} className="rounded-md px-2 py-1.5 text-left text-xs font-semibold text-blue-900 hover:bg-blue-50 aria-pressed:bg-blue-700 aria-pressed:text-white">{label}</button>)}
+        </nav>
+      </section>
 
-        {/* Sub-tab Navigation */}
-        <div className="flex items-center gap-2 pt-2 border-t border-slate-200 flex-wrap">
-          {isCentralAdmin && (
-            <button
-              type="button"
-              onClick={() => {
-                setActiveSubTab('landing');
-                setSettingsActiveSubTab('landing');
-              }}
-              className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer ${
-                activeSubTab === 'landing'
-                  ? 'bg-emerald-700 text-white shadow-md'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Layout className="w-4 h-4 text-lime-400" />
-              <span>Landing Page &amp; Portals</span>
-            </button>
-          )}
+      {activeSubTab === 'media' && <PhotosView initialTab="all" actionsRef={mediaActions} />}
 
-          <button
-            type="button"
-            onClick={() => {
-              setActiveSubTab('municipal');
-              setSettingsActiveSubTab('municipal');
-            }}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer ${
-              activeSubTab === 'municipal'
-                ? 'bg-emerald-700 text-white shadow-md'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <Building className="w-4 h-4" />
-            <span>Municipal Registry &amp; Office Setup</span>
-          </button>
-
-          {isCentralAdmin && ([
-            { id: 'background', label: 'Portal Background Wallpapers' },
-            { id: 'slsu', label: 'SLSU Extension Center' },
-            { id: 'seals', label: 'Official 3-Seal Logos' }
-          ] as const).map((asset) => (
-            <button
-              key={asset.id}
-              type="button"
-              onClick={() => {
-                setMediaAssetTab(asset.id);
-                setActiveSubTab('media');
-                setSettingsActiveSubTab('media');
-              }}
-              className={`rounded-xl px-3 py-2.5 text-left text-xs font-bold transition cursor-pointer ${
-                activeSubTab === 'media' && mediaAssetTab === asset.id
-                  ? 'bg-emerald-700 text-white shadow-md'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
-            >
-              {asset.label}
-            </button>
-          ))}
-
-          <button
-            type="button"
-            onClick={() => {
-              setActiveSubTab('display');
-              setSettingsActiveSubTab('display');
-            }}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 cursor-pointer ${
-              activeSubTab === 'display'
-                ? 'bg-emerald-700 text-white shadow-md'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <Sliders className="w-4 h-4" />
-            <span>Language</span>
-          </button>
+      {activeSubTab === 'municipal' && <section className={panelStyle}>
+        <h2 className="font-bold text-blue-950">Official Report Signatory &amp; Cropping Season</h2>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <label className="text-sm">Municipal Agriculturist Name<input className={inputStyle} value={settingsDraft.agriculturistName} onChange={(e) => changePreference('agriculturistName', e.target.value)} /></label>
+          <label className="text-sm">Signatory Title<input className={inputStyle} value={settingsDraft.agriculturistTitle} onChange={(e) => changePreference('agriculturistTitle', e.target.value)} /></label>
+          <label className="text-sm">Active Cropping Season &amp; Year<input list="registry-settings-seasons" className={inputStyle} value={settingsDraft.activeSeason} onChange={(e) => changePreference('activeSeason', e.target.value)} /><datalist id="registry-settings-seasons">{seasons.map((season) => <option key={season} value={season} />)}</datalist></label>
         </div>
-      </div>
+      </section>}
 
-      {/* 2. Content Tabs */}
-      {activeSubTab === 'media' && isCentralAdmin && <PhotosView initialTab={mediaAssetTab} />}
+      {activeSubTab === 'landing' && <section className={panelStyle}>
+        <h2 className="font-bold text-blue-950">Public Landing Page Visibility</h2>
+        <div className="flex flex-wrap gap-4 text-sm">
+          {([
+            ['showAnnouncement', 'Announcement banner'],
+            ['showBarangayDirectory', 'Barangay directory'],
+            ['showLegalRepository', 'Law repository section']
+          ] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2"><input type="checkbox" checked={settingsDraft[key]} onChange={(e) => changePreference(key, e.target.checked)} />{label}</label>)}
+        </div>
+        <button type="button" className={actionStyle} onClick={() => { setActiveSubTab('media'); setSettingsActiveSubTab('media'); }}>Edit Background Showcase</button>
+      </section>}
+
+      {activeSubTab === 'gis' && <section className={panelStyle}>
+        <h2 className="font-bold text-blue-950">GIS Map &amp; Registry Defaults</h2>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="text-sm">Default Map Layer<select className={inputStyle} value={settingsDraft.mapLayer} onChange={(e) => changePreference('mapLayer', e.target.value as RegistryPreferences['mapLayer'])}>
+            {Object.entries(MAP_LAYER_OPTIONS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select></label>
+          {([
+            ['mapLatitude', 'Map Center Latitude', -85, 85, 'any'],
+            ['mapLongitude', 'Map Center Longitude', -180, 180, 'any'],
+            ['mapZoom', 'Map Zoom', 3, 19, 1],
+            ['areaPrecision', 'Hectare Decimal Places', 0, 4, 1]
+          ] as const).map(([key, label, min, max, step]) => <label key={key} className="text-sm">{label}<input className={inputStyle} type="number" min={min} max={max} step={step} value={Number.isNaN(settingsDraft[key]) ? '' : settingsDraft[key]} onChange={(e) => changePreference(key, e.target.valueAsNumber)} /></label>)}
+          <label className="text-sm">New Parcel ID Prefix<input className={inputStyle} maxLength={24} value={settingsDraft.parcelPrefix} onChange={(e) => changePreference('parcelPrefix', e.target.value.toUpperCase())} /></label>
+        </div>
+      </section>}
+
+      {activeSubTab === 'maintenance' && <section className={panelStyle}>
+        <h2 className="font-bold text-blue-950">Data Sync, Backup &amp; Maintenance</h2>
+        <p role="status" className="text-sm text-slate-700">{isOnline ? 'Online' : 'Offline'} · {offlineQueueCount} farm updates pending · {pendingSettings.length} settings or barangay updates pending{isRealtimeSyncing ? ' · Syncing' : ''}</p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={actionStyle} disabled={!isOnline || savingSettings || isRealtimeSyncing} onClick={syncSettings}>{savingSettings ? 'Syncing…' : 'Sync Now with Supabase'}</button>
+          <button type="button" className={actionStyle} onClick={() => exportBackup('json')}>Export Full JSON Backup</button>
+          <button type="button" className={actionStyle} onClick={() => exportBackup('csv')}>Export Full CSV Backup</button>
+          <button type="button" className={actionStyle} aria-expanded={queueVisible} onClick={() => setQueueVisible(!queueVisible)}>View Pending Sync Queue</button>
+          <button type="button" className={actionStyle} onClick={() => {
+            if (!window.confirm('Clear the downloaded farm records on this device? Pending updates will be kept.')) return;
+            resetParcels();
+            localStorage.removeItem('silago_rice_parcels');
+            showToast('success', 'Local farm cache cleared.');
+          }}>Clear Local Cache</button>
+        </div>
+        {queueVisible && <ul className="space-y-1 text-sm text-slate-700">
+          {pendingSettings.map((setting) => <li key={setting}>{setting.replace(/^silago_/, '').replace(/_/g, ' ')}</li>)}
+          {getOfflinePendingFarms().map((farm) => <li key={farm.tagNumber}>{farm.tagNumber} · {farm.barangay}</li>)}
+          {!pendingSettings.length && !getOfflinePendingFarms().length && <li>No updates are pending.</li>}
+        </ul>}
+      </section>}
+
       {/* ============================================================ */}
       {/* SUB-TAB 1: ADMINISTRATOR PROFILE & PASSWORD                 */}
       {/* ============================================================ */}
@@ -1829,26 +1908,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
                     onChange={(e) => setLandingForm({ ...landingForm, statLabelBarangays: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
                     placeholder="BARANGAYS WITH RECORDS"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Season Year</label>
-                  <input
-                    type="text"
-                    value={landingForm.seasonYear}
-                    onChange={(e) => setLandingForm({ ...landingForm, seasonYear: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="2026"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Season Badge Label</label>
-                  <input
-                    type="text"
-                    value={landingForm.seasonLabel}
-                    onChange={(e) => setLandingForm({ ...landingForm, seasonLabel: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="WET SEASON REGISTRY"
                   />
                 </div>
               </div>
@@ -3228,26 +3287,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
         </div>
       )}
 
-      {/* Language preferences */}
-      {activeSubTab === 'display' && (
-        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-5">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-            <Globe className="w-5 h-5 text-blue-600" />
-            <div>
-              <h3 className="font-bold text-sm text-slate-900">Interface Language</h3>
-              <p className="text-xs text-slate-500">Choose the language used for prompts, forms, and report summaries.</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
-            <button type="button" onClick={() => setLanguage('EN')} className={`p-3 rounded-xl border text-center font-bold text-xs transition cursor-pointer ${language === 'EN' ? 'bg-emerald-700 text-white border-emerald-700' : 'bg-white text-slate-700 border-slate-300 hover:border-slate-400'}`}>
-              English (Default)
-            </button>
-            <button type="button" onClick={() => setLanguage('CEB')} className={`p-3 rounded-xl border text-center font-bold text-xs transition cursor-pointer ${language === 'CEB' ? 'bg-emerald-700 text-white border-emerald-700' : 'bg-white text-slate-700 border-slate-300 hover:border-slate-400'}`}>
-              Cebuano (Bisaya)
-            </button>
-          </div>
+      {activeSubTab === 'display' && <section className={panelStyle}>
+        <h2 className="font-bold text-blue-950">Language &amp; Interface Preferences</h2>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="text-sm">Default Language<select className={inputStyle} value={languageDraft} onChange={(e) => setLanguageDraft(e.target.value === 'CEB' ? 'CEB' : 'EN')}><option value="EN">English</option><option value="CEB">Cebuano (Bisaya)</option></select></label>
+          <label className="text-sm">Date Format<select className={inputStyle} value={settingsDraft.dateFormat} onChange={(e) => changePreference('dateFormat', e.target.value as RegistryPreferences['dateFormat'])}><option value="MDY">MM/DD/YYYY</option><option value="DMY">DD/MM/YYYY</option><option value="ISO">YYYY-MM-DD</option></select></label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settingsDraft.uppercaseNames} onChange={(e) => changePreference('uppercaseNames', e.target.checked)} />Display farmer names in uppercase</label>
         </div>
-      )}
+      </section>}
     </div>
   );
 };

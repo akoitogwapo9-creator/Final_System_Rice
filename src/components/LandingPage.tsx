@@ -84,7 +84,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onNavigateToPortalTab
 }) => {
   const {
-    currentUser,
+    currentUser, registryPreferences, activeSeason,
     barangayProfiles,
     parcels,
     language,
@@ -204,6 +204,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   return (
     <div className="min-h-screen bg-gov-canvas text-gov-ink font-sans flex flex-col selection:bg-gov-forest selection:text-white">
       {/* Top Official Notice Bar */}
+      {registryPreferences.showAnnouncement && (
       <div className="bg-gov-forest-dark text-white/90 px-4 py-2 text-xs font-medium flex items-center justify-between gap-3 border-b border-white/10">
         <div className="max-w-[1500px] mx-auto w-full flex items-center justify-between gap-4">
           <div className="flex items-center gap-2 min-w-0">
@@ -215,15 +216,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               {landingPageConfig?.topNoticeText || '2026 Wet Season RSBSA Georeferencing & Palay Monitoring active across all 15 Silago Barangays.'}
             </span>
           </div>
-          <button
+          {registryPreferences.showBarangayDirectory && (<button
             type="button"
             onClick={() => scrollToSection('barangays-section')}
             className="text-amber-200 hover:text-white font-semibold text-[11px] underline uppercase tracking-wider shrink-0 cursor-pointer hidden sm:inline"
           >
             {landingPageConfig?.topNoticeLinkText || 'Explore 15 Barangays →'}
-          </button>
+          </button>)}
         </div>
       </div>
+      )}
 
       {/* Official Municipal Header Bar */}
       <header className="bg-white border-b border-gov-line sticky top-0 z-40">
@@ -252,20 +254,20 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               >
                 About Office
               </button>
-              <button
+              {registryPreferences.showBarangayDirectory && (<button
                 type="button"
                 onClick={() => scrollToSection('barangays-section')}
                 className="hover:text-gov-green transition cursor-pointer"
               >
                 15 Barangays
-              </button>
-              <button
+              </button>)}
+              {registryPreferences.showLegalRepository && (<button
                 type="button"
                 onClick={() => scrollToSection('legal-decrees-section')}
                 className="hover:text-gov-green transition cursor-pointer"
               >
                 Legal Decrees
-              </button>
+              </button>)}
               <button
                 type="button"
                 onClick={() => scrollToSection('contact-section')}
@@ -393,20 +395,20 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               >
                 About Municipal Office
               </button>
-              <button
+              {registryPreferences.showBarangayDirectory && (<button
                 type="button"
                 onClick={() => scrollToSection('barangays-section')}
                 className="text-left py-2 px-3 rounded-xl hover:bg-slate-100 transition"
               >
                 15 Rice Barangays
-              </button>
-              <button
+              </button>)}
+              {registryPreferences.showLegalRepository && (<button
                 type="button"
                 onClick={() => scrollToSection('legal-decrees-section')}
                 className="text-left py-2 px-3 rounded-xl hover:bg-slate-100 transition"
               >
                 Legal Decrees &amp; Ordinances
-              </button>
+              </button>)}
               <button
                 type="button"
                 onClick={() => scrollToSection('contact-section')}
@@ -663,16 +665,17 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
           <div className="px-4 py-4 text-center bg-gov-green-soft/60">
             <span className="font-serif text-2xl font-bold text-gov-forest sm:text-3xl block tabular-nums">
-              {landingPageConfig?.seasonYear || '2026'}
+              {activeSeason.match(/\b20\d{2}\b/)?.[0] || landingPageConfig?.seasonYear || '2026'}
             </span>
             <span className="mt-1 block text-[10px] font-semibold uppercase tracking-wider text-gov-green sm:text-[11px]">
-              {landingPageConfig?.seasonLabel || 'WET SEASON REGISTRY'}
+              {activeSeason}
             </span>
           </div>
         </div>
       </section>
 
       {/* Section: "FULL MUNICIPALITY COVERAGE" - All 15 Barangays */}
+      {registryPreferences.showBarangayDirectory && (
       <section id="barangays-section" className="py-10 px-4 sm:px-6 max-w-7xl mx-auto w-full">
         {/* Header Row */}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
@@ -760,6 +763,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           })}
         </div>
       </section>
+      )}
 
       {/* LGU Silago Field Operations CTA Banner */}
       <section className="px-4 sm:px-6 max-w-7xl mx-auto w-full my-6">
@@ -806,6 +810,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       </section>
 
       {/* Official Legal Decrees & Rice Policies (Live synced from Central Law Registry) */}
+      {registryPreferences.showLegalRepository && (
       <section id="legal-decrees-section" className="border-t border-slate-200/80 bg-white py-12 px-4 sm:px-6 w-full">
         <div className="max-w-7xl mx-auto space-y-6">
           <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
@@ -905,6 +910,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           )}
         </div>
       </section>
+      )}
 
       {/* Official Footer */}
       <footer id="contact-section" className="bg-gov-forest-dark text-white/75 pt-12 pb-8 px-4 sm:px-6 mt-auto border-t border-white/10">
@@ -941,22 +947,22 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 </button>
               </li>
               <li>
-                <button
+                {registryPreferences.showBarangayDirectory && (<button
                   type="button"
                   onClick={() => scrollToSection('barangays-section')}
                   className="hover:text-white transition cursor-pointer"
                 >
                   {landingPageConfig?.footerNavDirectory || '15 Barangays Directory'}
-                </button>
+                </button>)}
               </li>
               <li>
-                <button
+                {registryPreferences.showLegalRepository && (<button
                   type="button"
                   onClick={() => scrollToSection('legal-decrees-section')}
                   className="hover:text-white transition cursor-pointer"
                 >
                   Legal Decrees &amp; Ordinances
-                </button>
+                </button>)}
               </li>
             </ul>
           </div>
@@ -1057,7 +1063,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {/* Modals */}
       {selectedBarangayModal && (
         <PublicBarangayDialog
-          barangay={selectedBarangayModal}
+          barangay={{ ...selectedBarangayModal, ...barangayProfiles[selectedBarangayModal.name]?.details }}
           onClose={() => setSelectedBarangayModal(null)}
         />
       )}

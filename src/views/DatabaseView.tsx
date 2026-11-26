@@ -1,3 +1,4 @@
+import { formatRegistryDate, formatRegistryName } from '../data/registryPreferences';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import {
@@ -86,7 +87,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   openCertificateOnLoad = false,
   onCertificateRouteHandled
 }) => {
-  const {
+  const { registryPreferences, municipalBranding,
     parcels,
     deleteParcel,
     deleteBulkParcels,
@@ -215,24 +216,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     parcel: null
   });
 
-  // Format Birthday to standard MM/DD/YYYY format
-  const formatBirthday = (bday?: string) => {
-    if (!bday) return '-';
-    const clean = bday.trim();
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(clean)) return clean;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
-      const [y, m, d] = clean.split('-');
-      return `${m}/${d}/${y}`;
-    }
-    const d = new Date(clean);
-    if (!isNaN(d.getTime())) {
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      const yyyy = d.getFullYear();
-      return `${mm}/${dd}/${yyyy}`;
-    }
-    return clean;
-  };
+  const formatBirthday = (value?: string) => formatRegistryDate(value, registryPreferences.dateFormat);
 
   const getFarmLocation = (parcel: FarmParcel) => {
     if (parcel.farmLocation && parcel.farmLocation.trim()) {
@@ -308,10 +292,10 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       const giv = parcel.farmerGivenName.trim();
       const mid = parcel.farmerMiddleName ? ` ${parcel.farmerMiddleName.trim()}` : '';
       const suf = parcel.farmerSuffix?.trim() ? ` ${parcel.farmerSuffix.trim()}` : '';
-      return `${fam}, ${giv}${mid}${suf}`.trim().toUpperCase();
+      return formatRegistryName(`${fam}, ${giv}${mid}${suf}`.trim(), registryPreferences.uppercaseNames);
     }
     if (parcel.raiserName && parcel.raiserName.trim()) {
-      return parcel.raiserName.trim().toUpperCase();
+      return formatRegistryName(parcel.raiserName.trim(), registryPreferences.uppercaseNames);
     }
     return 'UNNAMED FARMER';
   };
@@ -545,7 +529,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       barangay: parcel.barangay || 'Balagawan',
       purok: parcel.purok || 'Purok 1',
       residentialAddress: parcel.residential_address || parcel.address || (parcel.purok ? `Purok ${parcel.purok}, Brgy. ${parcel.barangay}, Silago` : `Brgy. ${parcel.barangay}, Silago`),
-      birthday: parcel.birthday ? formatBirthday(parcel.birthday) : '',
+      birthday: parcel.birthday ? formatRegistryDate(parcel.birthday, 'MDY') : '',
       farmLocation: parcel.farmLocation || getFarmLocation(parcel),
       lat: parcel.lat || 10.5312,
       lng: parcel.lng || 125.1643,
@@ -720,7 +704,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         `"${farmLoc}"`,
         p.lat ? p.lat.toFixed(6) : '',
         p.lng ? p.lng.toFixed(6) : '',
-        (p.weightKg || p.areaHa || 0).toFixed(2),
+        (p.weightKg || p.areaHa || 0).toFixed(registryPreferences.areaPrecision),
         `"${commodityPlanted}"`,
         `"${rec ? rec.seedVariety : p.breed}"`,
         `"${selectedSeason}"`,
@@ -755,7 +739,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         <td style="padding: 6px; border: 1px solid #ccc;">Brgy. ${p.barangay}</td>
         <td style="padding: 6px; border: 1px solid #ccc;">${getRecordedCropValue(p.breed) || 'N/A'} (${getRecordedCropValue(p.seedType) || 'N/A'})</td>
         <td style="padding: 6px; border: 1px solid #ccc;">${p.purpose || 'Irrigated Lowland'}</td>
-        <td style="padding: 6px; border: 1px solid #ccc; text-align: right; font-weight: bold;">${(p.weightKg || p.areaHa || 0).toFixed(2)} ha</td>
+        <td style="padding: 6px; border: 1px solid #ccc; text-align: right; font-weight: bold;">${(p.weightKg || p.areaHa || 0).toFixed(registryPreferences.areaPrecision)} ha</td>
         <td style="padding: 6px; border: 1px solid #ccc; text-align: right;">${displayProduction(p)}</td>
         <td style="padding: 6px; border: 1px solid #ccc; text-align: center;">${(p.boundaryCoords && p.boundaryCoords.length > 2) || (p.lat && p.lng) ? 'GPS MAPPED' : 'UNMAPPED'}</td>
       </tr>
@@ -802,7 +786,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
           <div style="width: 250px; text-align: center;">
             <p>Prepared by:</p>
             <br/><br/>
-            <p style="border-top: 1px solid #000; font-weight: bold; margin-top: 20px;">${currentUser?.name || 'Municipal Agriculture Office'}</p>
+            <p style="border-top: 1px solid #000; font-weight: bold; margin-top: 20px;">${registryPreferences.agriculturistName || currentUser?.name || municipalBranding.officeName}</p>
             <p style="font-size: 9pt; margin: 0;">Municipal Agriculture Office</p>
           </div>
           <div style="width: 250px; text-align: center;">
@@ -1278,7 +1262,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
           </div>
 
           <div className="text-[11px] font-medium text-stone-600">
-            Database Total: <strong className="text-stone-900">{parcels.length}</strong> recorded parcels ({totalAreaMapped.toFixed(2)} Ha)
+            Database Total: <strong className="text-stone-900">{parcels.length}</strong> recorded parcels ({totalAreaMapped.toFixed(registryPreferences.areaPrecision)} Ha)
           </div>
         </div>
       </div>
@@ -1718,7 +1702,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                           </button>
                           <div className="flex flex-col min-w-0">
                             <span
-                              className="font-bold text-gov-ink text-xs uppercase truncate block max-w-[170px]"
+                              className="font-bold text-gov-ink text-xs truncate block max-w-[170px]"
                               title={getFarmerDisplayName(parcel)}
                             >
                               {getFarmerDisplayName(parcel)}
@@ -1751,7 +1735,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
                       {/* 7. FARM AREA (HA) */}
                       <td className="w-24 min-w-[90px] py-2 px-2.5 text-right whitespace-nowrap font-mono font-bold text-gov-ink text-xs tabular-nums border-r border-stone-200">
-                        {(parcel.weightKg || parcel.areaHa || 0).toFixed(2)} ha
+                        {(parcel.weightKg || parcel.areaHa || 0).toFixed(registryPreferences.areaPrecision)} ha
                       </td>
 
                       {/* 8. EST. YIELD (MT) */}
@@ -1866,7 +1850,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
             </span>
             <span className="text-stone-300">&bull;</span>
             <span>
-              Total Area: <strong className="text-emerald-700 font-bold font-mono">{totalAreaMapped.toFixed(2)} ha</strong>
+              Total Area: <strong className="text-emerald-700 font-bold font-mono">{totalAreaMapped.toFixed(registryPreferences.areaPrecision)} ha</strong>
             </span>
           </div>
 
@@ -2327,8 +2311,8 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                   <DaLogo size={56} className="h-14 w-14 object-contain shrink-0" />
                   <div>
                     <p className="text-[11px] uppercase tracking-wider text-slate-600 font-medium">Republic of the Philippines</p>
-                    <p className="text-[11px] uppercase tracking-wider text-slate-600 font-medium">Province of Southern Leyte</p>
-                    <h2 className="text-base font-black text-emerald-950 tracking-tight">MUNICIPALITY OF SILAGO</h2>
+                    <p className="text-[11px] uppercase tracking-wider text-slate-600 font-medium">{municipalBranding.provinceText}</p>
+                    <h2 className="text-base font-black text-emerald-950 tracking-tight">{municipalBranding.municipalityName}</h2>
                     <h3 className="text-xs font-bold text-emerald-800">OFFICE OF THE MUNICIPAL AGRICULTURIST</h3>
                   </div>
                   <SilagoSeal size={56} className="h-14 w-14 object-contain shrink-0" />
@@ -2349,7 +2333,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                 </div>
                 <div className="bg-emerald-50 p-2.5 rounded-xl border border-emerald-200">
                   <span className="text-emerald-700 text-[10px] block font-semibold">Total Farm Area</span>
-                  <span className="font-bold text-base text-emerald-900">{totalAreaMapped.toFixed(2)} ha</span>
+                  <span className="font-bold text-base text-emerald-900">{totalAreaMapped.toFixed(registryPreferences.areaPrecision)} ha</span>
                 </div>
                 <div className="bg-blue-50 p-2.5 rounded-xl border border-blue-200">
                   <span className="text-blue-700 text-[10px] block font-semibold">Active Cropping Season</span>
@@ -2388,7 +2372,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                         <td className="p-2 border-r border-slate-300 font-semibold">{getFarmerDisplayName(p)}</td>
                         <td className="p-2 border-r border-slate-300">Brgy. {p.barangay}</td>
                         <td className="p-2 border-r border-slate-300">{p.breed} • {p.purpose}</td>
-                        <td className="p-2 border-r border-slate-300 text-right font-mono font-bold">{(p.weightKg || p.areaHa || 0).toFixed(2)} ha</td>
+                        <td className="p-2 border-r border-slate-300 text-right font-mono font-bold">{(p.weightKg || p.areaHa || 0).toFixed(registryPreferences.areaPrecision)} ha</td>
                         <td className="p-2 border-r border-slate-300 text-right font-mono">{displayProduction(p)}</td>
                         <td className="p-2 text-center font-bold text-[10px]">
                           <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
@@ -2406,9 +2390,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                 <div>
                   <p className="text-slate-500 mb-8">Prepared &amp; Inspected by:</p>
                   <p className="font-bold border-t border-slate-400 pt-1 text-slate-900 uppercase">
-                    {currentUser?.name || 'Municipal Agriculture Office'}
+                    {registryPreferences.agriculturistName || currentUser?.name || municipalBranding.officeName}
                   </p>
-                  <p className="text-[10px] text-slate-500">Municipal Agriculture Office</p>
+                  <p className="text-[10px] text-slate-500">{registryPreferences.agriculturistTitle || municipalBranding.officeName}</p>
                 </div>
                 <div>
                   <p className="text-slate-500 mb-8">Attested &amp; Approved by:</p>

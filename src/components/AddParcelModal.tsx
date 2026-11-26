@@ -90,8 +90,11 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     currentUser,
     barangayProfiles,
     permissions,
+    registryPreferences,
     parcels
   } = useApp();
+
+  const parcelPrefix = registryPreferences.parcelPrefix;
 
   // Determine LFT jurisdiction
   const assignedBarangays = useMemo(() => {
@@ -218,7 +221,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       const farmBarangay = availableBarangays.find((barangay) =>
         matchBarangay(barangay.name, initialCoords?.barangay || ''))?.name || effectiveDefaultBarangay;
       const parcelCode = BARANGAY_PARCEL_CODES[farmBarangay as OfficialBarangay];
-      const randomTag = `FARMER-SLG-${parcelCode}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const randomTag = `${parcelPrefix}-${parcelCode}-${Math.floor(1000 + Math.random() * 9000)}`;
       setFallbackParcelId(randomTag);
       const residentialAddress = `${farmBarangay}, Silago, Southern Leyte`;
 
@@ -277,11 +280,11 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
   const selectedResidentialBarangay = residentialBarangay || formData.barangay || effectiveDefaultBarangay;
 
   const rawParcelId = formData.tagNumber?.trim() || fallbackParcelId;
-  const registrationParcelId = editingParcel?.tagNumber || (
-    rawParcelId.startsWith('FARMER-SLG-')
-      ? rawParcelId
-      : `FARMER-SLG-${rawParcelId.replace(/^FARMER-/, '').replace(/^SLG-/, '')}`
-  );
+  const registrationParcelId = editingParcel?.tagNumber || rawParcelId;
+  const updateParcelBarangayCode = (id: string, code: string) =>
+    id.startsWith(`${parcelPrefix}-`)
+      ? `${parcelPrefix}-${id.slice(parcelPrefix.length + 1).replace(/^[^-]+-/, `${code}-`)}`
+      : id;
 
   // 1. Real-time Duplicate Check for RSBSA Number (both local state and Supabase query)
   useEffect(() => {
@@ -1132,7 +1135,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                             setParcelIdOverridden(true);
                             setFormData({ ...formData, tagNumber: e.target.value });
                           }}
-                          placeholder={formSchema.getPlaceholder('reg-parcel-id', 'e.g. FARMER-SLG-POB1-101')}
+                          placeholder={formSchema.getPlaceholder('reg-parcel-id', `e.g. ${parcelPrefix}-POB1-101`)}
                           className={`${OFFICE_INPUT_CLASS} font-mono font-semibold`}
                         />
                       </div>
@@ -1364,11 +1367,11 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                             const chosenRes = e.target.value as OfficialBarangay;
                             const code = BARANGAY_PARCEL_CODES[chosenRes];
                             if (!code) return;
-                            setFallbackParcelId((id) => id.replace(/^FARMER-SLG-[^-]+-/, `FARMER-SLG-${code}-`));
+                            setFallbackParcelId((id) => updateParcelBarangayCode(id, code));
                             setFormData((prev) => ({
                               ...prev,
                               tagNumber: !editingParcel && !parcelIdOverridden
-                                ? prev.tagNumber?.replace(/^FARMER-SLG-[^-]+-/, `FARMER-SLG-${code}-`)
+                                ? updateParcelBarangayCode(prev.tagNumber || '', code)
                                 : prev.tagNumber,
                               address: `${chosenRes}, Silago, Southern Leyte`,
                               residential_address: `${chosenRes}, Silago, Southern Leyte`

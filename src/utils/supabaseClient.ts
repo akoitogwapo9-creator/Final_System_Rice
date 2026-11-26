@@ -1,3 +1,4 @@
+import { readRegistryPreferences } from '../data/registryPreferences';
 import { isVerifiedAdminEmail } from './adminIdentity';
 import { SupabaseClient, RealtimeChannel, type User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { supabase as sharedSupabaseClient, memoryAuthStorage } from '../supabase';
@@ -956,20 +957,7 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
   const digits = rawContact.replace(/\D/g, '');
   const contact_number = digits.length === 11 && digits.startsWith('09') ? digits : digits.slice(0, 11);
 
-  // Auto-generate or format ID as 'FARMER-SLG-...'
-  const rawId = (norm.tagNumber || '').trim();
-  let formattedId = rawId;
-  if (!formattedId) {
-    formattedId = `FARMER-SLG-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-  } else if (!formattedId.startsWith('FARMER-SLG-')) {
-    if (formattedId.startsWith('FARMER-')) {
-      formattedId = `FARMER-SLG-${formattedId.replace(/^FARMER-/, '')}`;
-    } else if (formattedId.startsWith('SLG-')) {
-      formattedId = `FARMER-${formattedId}`;
-    } else {
-      formattedId = `FARMER-SLG-${formattedId}`;
-    }
-  }
+  const formattedId = norm.tagNumber?.trim() || `${readRegistryPreferences().parcelPrefix}-${Date.now().toString(36).toUpperCase()}`;
 
   // Optimize payload: never store heavy Base64 strings or blob URLs into database row
   const safePhotoUrl =

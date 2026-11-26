@@ -54,7 +54,12 @@ export type BarangayClassification = string;
 export function getBarangayClassifications(profiles: BarangayProfiles): string[] {
   return [...new Set([...BARANGAY_CLASSIFICATIONS, ...OFFICIAL_15_BARANGAYS.map((name) => getBarangayZone(name, profiles))])];
 }
-export type BarangayProfiles = Record<string, { displayName: string; classification: BarangayClassification }>;
+export type BarangayProfiles = Record<string, {
+  displayName: string;
+  classification: BarangayClassification;
+  details?: Partial<Pick<Barangay, 'totalAreaHa' | 'irrigatedAreaHa' | 'rainfedAreaHa' | 'lat' | 'lng' | 'focalPerson' | 'contactNumber' | 'terrain' | 'puroks'>>;
+  boundary?: [number, number][] | null;
+}>;
 
 export function getBarangayLabel(name: string, profiles: BarangayProfiles): string {
   return profiles[getDisplayBarangay(name)]?.displayName || name;

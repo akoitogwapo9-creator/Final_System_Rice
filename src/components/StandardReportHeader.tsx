@@ -28,17 +28,21 @@ interface StandardReportHeaderProps {
  * MUNICIPAL AGRICULTURE OFFICE
  */
 export const StandardReportHeader: React.FC<StandardReportHeaderProps> = ({
-  republicHeader = 'Republic of the Philippines',
-  provinceHeader = 'Province of Southern Leyte',
-  municipalityHeader = 'MUNICIPALITY OF SILAGO',
-  officeHeader = 'MUNICIPAL AGRICULTURE OFFICE',
+  republicHeader: customRepublicHeader,
+  provinceHeader: customProvinceHeader,
+  municipalityHeader: customMunicipalityHeader,
+  officeHeader: customOfficeHeader,
   subtitle,
   isEditable = false,
   onEditLogo,
   onHeaderChange,
   className = ''
 }) => {
-  const { daLogoUrl, silagoLogoUrl, southernLeyteLogoUrl } = useApp();
+  const { daLogoUrl, silagoLogoUrl, southernLeyteLogoUrl, municipalBranding } = useApp();
+  const republicHeader = customRepublicHeader || municipalBranding.republicText || 'Republic of the Philippines';
+  const provinceHeader = customProvinceHeader || municipalBranding.provinceText || 'Province of Southern Leyte';
+  const municipalityHeader = customMunicipalityHeader || municipalBranding.municipalityName;
+  const officeHeader = customOfficeHeader || municipalBranding.officeName;
 
   return (
     <div className={`flex flex-col items-center justify-center pb-3 border-b-2 border-black text-center select-none ${className}`}>

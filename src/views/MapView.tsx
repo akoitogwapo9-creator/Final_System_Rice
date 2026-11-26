@@ -1,3 +1,4 @@
+import { formatRegistryName } from '../data/registryPreferences';
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import L from 'leaflet';
 if (typeof window !== 'undefined') {
@@ -6,7 +7,7 @@ if (typeof window !== 'undefined') {
 import 'leaflet.heat';
 import { useApp } from '../context/AppContext';
 import { BARANGAYS, getBarangayLabel, getBarangayZone, matchBarangay } from '../data/barangays';
-import { SILAGO_OFFICIAL_GEOJSON, SilagoGeoJSONFeature, findSilagoBarangayFeature, normalizeBarangayName } from '../data/silagoGeoJson';
+import { applyBarangayMapProfile, SILAGO_OFFICIAL_GEOJSON, SilagoGeoJSONFeature, findSilagoBarangayFeature, normalizeBarangayName } from '../data/silagoGeoJson';
 import { SILAGO_BARANGAY_BOUNDARIES, BarangayBoundary } from '../data/barangayBoundaries';
 import { calculateCropGrowthStage } from '../data/riceVarieties';
 import { FarmParcel, Barangay } from '../types';
@@ -358,7 +359,7 @@ export const MapView: React.FC<MapViewProps> = ({
   focusParcel,
   onOpenLogin
 }) => {
-  const { parcels, currentUser, lftAccounts, barangayProfiles, t } = useApp();
+  const { parcels, currentUser, lftAccounts, barangayProfiles, registryPreferences, t } = useApp();
   const isAuthorized = Boolean(currentUser && onOpenAddParcelWithCoords);
   const isBarangayScoped = Boolean(currentUser && currentUser.role !== 'Central Admin');
   const assignedBarangays = useMemo(() => {
@@ -407,19 +408,20 @@ export const MapView: React.FC<MapViewProps> = ({
   const [isWeatherLoading, setIsWeatherLoading] = useState<boolean>(false);
 
   // Farmer Landholdings Directory Collapsible Carousel Drawer State
-  const [isFarmerListOpen, setIsFarmerListOpen] = useState<boolean>(false);
+  const [isFarmerListOpen, setIsFarmerListOpen] = useState(false);
   const [activeCardTag, setActiveCardTag] = useState<string | null>(null);
   const [hoveredParcelTag, setHoveredParcelTag] = useState<string | null>(null);
 
   // View & Heatmap state
   const [mapDisplayMode, setMapDisplayMode] = useState<MapDisplayMode>('markers');
   const [heatMetric, setHeatMetric] = useState<HeatMetric>('area');
-  const [currentZoom, setCurrentZoom] = useState<number>(13);
+  const [currentZoom, setCurrentZoom] = useState<number>(registryPreferences.mapZoom);
   const [isHudExpanded, setIsHudExpanded] = useState(false);
 
   // Floating Layer Control state
   const [isLayerControlOpen, setIsLayerControlOpen] = useState(false);
-  const [activeBaseLayer, setActiveBaseLayer] = useState<BaseLayerType>('osm');
+  const [activeBaseLayer, setActiveBaseLayer] = useState<BaseLayerType>(registryPreferences.mapLayer);
+  useEffect(() => setActiveBaseLayer(registryPreferences.mapLayer), [registryPreferences.mapLayer]);
   const [showParcelsLayer, setShowParcelsLayer] = useState(true);
   const [showBoundariesLayer, setShowBoundariesLayer] = useState(true);
   const [showFacilitiesLayer, setShowFacilitiesLayer] = useState(true);
@@ -535,9 +537,9 @@ export const MapView: React.FC<MapViewProps> = ({
       .filter((barangay) => barangay.name.toLocaleLowerCase().includes(query))
       .map((barangay) => ({ type: 'barangay' as const, key: `barangay-${barangay.name}`, label: `Brgy. ${barangay.name}`, barangay }));
     const parcelMatches = visibleParcels
-      .filter((parcel) => `${parcel.raiserName} ${parcel.tagNumber} ${parcel.swineNameOrId || ''} ${parcel.breed} ${parcel.barangay}`.toLocaleLowerCase().includes(query))
+      .filter((parcel) => `${formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)} ${parcel.tagNumber} ${parcel.swineNameOrId || ''} ${parcel.breed} ${parcel.barangay}`.toLocaleLowerCase().includes(query))
       .slice(0, 5)
-      .map((parcel) => ({ type: 'parcel' as const, key: `parcel-${parcel.tagNumber}`, label: `${parcel.raiserName} · ${parcel.swineNameOrId || parcel.tagNumber}`, parcel }));
+      .map((parcel) => ({ type: 'parcel' as const, key: `parcel-${parcel.tagNumber}`, label: `${formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)} · ${parcel.swineNameOrId || parcel.tagNumber}`, parcel }));
     return [...barangayMatches.slice(0, 3), ...parcelMatches].slice(0, 7);
   }, [searchQuery, visibleBarangays, visibleParcels]);
 
@@ -662,9 +664,9 @@ export const MapView: React.FC<MapViewProps> = ({
     if (!mapContainerRef.current) return;
     if (mapInstanceRef.current) return;
 
-    const initialLat = focusBarangay ? focusBarangay.lat : 10.538;
-    const initialLng = focusBarangay ? focusBarangay.lng : 125.172;
-    const initialZoom = 13;
+    const initialLat = focusBarangay ? focusBarangay.lat : registryPreferences.mapLatitude;
+    const initialLng = focusBarangay ? focusBarangay.lng : registryPreferences.mapLongitude;
+    const initialZoom = registryPreferences.mapZoom;
 
     const map = L.map(mapContainerRef.current, {
       center: [initialLat, initialLng],
@@ -703,13 +705,12 @@ export const MapView: React.FC<MapViewProps> = ({
     weatherMarkersGroupRef.current = weatherMarkersGroup;
     mapInstanceRef.current = map;
 
-    // Auto-fit map bounds directly to Silago municipality borders on map start
-    const accessibleFeatures = SILAGO_OFFICIAL_GEOJSON.features.filter((feature) => canAccessBarangay(feature.properties.name));
-    const tempGeoJson = L.geoJSON({ ...SILAGO_OFFICIAL_GEOJSON, features: accessibleFeatures } as any);
-    const silagoBounds = tempGeoJson.getBounds();
-    if (silagoBounds.isValid() && !focusBarangay) {
-      map.fitBounds(silagoBounds, { padding: [25, 25] });
+    if (!focusBarangay && currentUser?.role !== 'Central Admin') {
+      const features = SILAGO_OFFICIAL_GEOJSON.features.filter((feature) => canAccessBarangay(feature.properties.name));
+      const bounds = L.geoJSON({ ...SILAGO_OFFICIAL_GEOJSON, features } as any).getBounds();
+      if (bounds.isValid()) map.fitBounds(bounds, { padding: [25, 25] });
     }
+    setCurrentZoom(map.getZoom());
 
     map.on('zoomend', () => {
       const z = map.getZoom();
@@ -727,6 +728,12 @@ export const MapView: React.FC<MapViewProps> = ({
       farmerLocationsGroupRef.current = null;
     };
   }, [canAccessBarangay]);
+
+  useEffect(() => {
+    if (!focusBarangay && currentUser?.role === 'Central Admin') {
+      mapInstanceRef.current?.setView([registryPreferences.mapLatitude, registryPreferences.mapLongitude], registryPreferences.mapZoom);
+    }
+  }, [registryPreferences.mapLatitude, registryPreferences.mapLongitude, registryPreferences.mapZoom, currentUser?.role, focusBarangay]);
 
   const handleFinishDrawnPolygon = useCallback(() => {
     if (!isAuthorized) return;
@@ -879,7 +886,7 @@ export const MapView: React.FC<MapViewProps> = ({
           ? `${[focusParcel.farmerGivenName, focusParcel.farmerMiddleName, focusParcel.farmerFamilyName, focusParcel.farmerSuffix].filter(Boolean).join(' ')}`
           : focusParcel.raiserName;
       const parcelArea = getParcelAreaHa(focusParcel);
-      const areaHa = parcelArea > 0 ? `${parcelArea.toFixed(2)} ha` : 'Not recorded';
+      const areaHa = parcelArea > 0 ? `${parcelArea.toFixed(registryPreferences.areaPrecision)} ha` : 'Not recorded';
       const rsbsa = focusParcel.swineNameOrId || 'Not recorded';
       const variety = focusParcel.breed || 'Not recorded';
       const growthStage = calculateCropGrowthStage(focusParcel.plantingDate || '', focusParcel.breed || '');
@@ -1047,7 +1054,9 @@ export const MapView: React.FC<MapViewProps> = ({
 
     if (!showBoundariesLayer) return;
 
-    const accessibleFeatures = SILAGO_OFFICIAL_GEOJSON.features.filter((feature) => canAccessBarangay(feature.properties.name));
+    const accessibleFeatures = SILAGO_OFFICIAL_GEOJSON.features
+      .filter((feature) => canAccessBarangay(feature.properties.name))
+      .map((feature) => applyBarangayMapProfile(feature, barangayProfiles[feature.properties.name]));
     const geoJsonLayer = L.geoJSON({ ...SILAGO_OFFICIAL_GEOJSON, features: accessibleFeatures } as any, {
       style: (feature) => {
         const name = feature?.properties?.name || '';
@@ -1331,10 +1340,10 @@ export const MapView: React.FC<MapViewProps> = ({
         iconSize: [23, 23], iconAnchor: [11, 11]
       });
       L.marker([location.lat, location.lng], { icon, zIndexOffset: 150 }).addTo(group)
-        .bindTooltip(`<strong>${escapeHtml(parcel.raiserName)}</strong><br/>Registered farmer · Brgy. ${escapeHtml(parcel.barangay)}`, { sticky: true })
+        .bindTooltip(`<strong>${escapeHtml(formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames))}</strong><br/>Registered farmer · Brgy. ${escapeHtml(parcel.barangay)}`, { sticky: true })
         .on('click', (event) => { L.DomEvent.stopPropagation(event); handleSelectParcelFromMap(parcel); });
     });
-  }, [filteredParcels, showFarmerLocations, handleSelectParcelFromMap]);
+  }, [filteredParcels, showFarmerLocations, handleSelectParcelFromMap, registryPreferences.uppercaseNames]);
 
   // REQUIREMENT 1 & 2: CLEAN GPS LOCATION PINPOINT (MOCK RECTANGLES AND FLOATING PILLS REMOVED)
   useEffect(() => {
@@ -1378,7 +1387,7 @@ export const MapView: React.FC<MapViewProps> = ({
               L.DomEvent.stopPropagation(e);
               handleSelectParcelFromMap(parcel);
             })
-            .bindTooltip(`<strong>${escapeHtml(parcel.tagNumber)}</strong> &bull; ${escapeHtml(parcel.raiserName)}<br><span style="font-size:10.5px; color:#047857;">Boundary recorded; center point needs GPS review.</span>`, { sticky: true });
+            .bindTooltip(`<strong>${escapeHtml(parcel.tagNumber)}</strong> &bull; ${escapeHtml(formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames))}<br><span style="font-size:10.5px; color:#047857;">Boundary recorded; center point needs GPS review.</span>`, { sticky: true });
         }
         return;
       }
@@ -1456,8 +1465,8 @@ export const MapView: React.FC<MapViewProps> = ({
       pinMarker.bindTooltip(
         `<div style="font-size: 11px; padding: 4px; font-family: sans-serif;">
           <div style="font-weight: 900; color: #2563eb; font-size: 12px;">${escapeHtml(parcel.tagNumber)}</div>
-          <div style="font-weight: 800; color: #0f172a; margin-top: 1px;">${escapeHtml(parcel.raiserName)}</div>
-          <div style="color: #475569; font-size: 10.5px;">📍 Brgy. ${escapeHtml(parcel.barangay)} &bull; <strong>${getParcelAreaHa(parcel) > 0 ? `${getParcelAreaHa(parcel).toFixed(2)} ha` : 'Area not recorded'}</strong></div>
+          <div style="font-weight: 800; color: #0f172a; margin-top: 1px;">${escapeHtml(formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames))}</div>
+          <div style="color: #475569; font-size: 10.5px;">📍 Brgy. ${escapeHtml(parcel.barangay)} &bull; <strong>${getParcelAreaHa(parcel) > 0 ? `${getParcelAreaHa(parcel).toFixed(registryPreferences.areaPrecision)} ha` : 'Area not recorded'}</strong></div>
           <div style="font-size: 10px; color: #16a34a; font-weight: 700; margin-top: 2px;">🌾 ${escapeHtml(parcel.breed)}</div>
         </div>`,
         { sticky: true }
@@ -1479,12 +1488,12 @@ export const MapView: React.FC<MapViewProps> = ({
         });
 
         poly.bindTooltip(
-          `<strong>${escapeHtml(parcel.tagNumber)}</strong> &bull; ${escapeHtml(parcel.raiserName)}<br><span style="font-size:10.5px; color:#047857;">Area: <strong>${getParcelAreaHa(parcel) > 0 ? `${getParcelAreaHa(parcel).toFixed(2)} ha` : 'Not recorded'}</strong> (${escapeHtml(parcel.breed)})</span>`,
+          `<strong>${escapeHtml(parcel.tagNumber)}</strong> &bull; ${escapeHtml(formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames))}<br><span style="font-size:10.5px; color:#047857;">Area: <strong>${getParcelAreaHa(parcel) > 0 ? `${getParcelAreaHa(parcel).toFixed(registryPreferences.areaPrecision)} ha` : 'Not recorded'}</strong> (${escapeHtml(parcel.breed)})</span>`,
           { sticky: true }
         );
       }
     });
-  }, [filteredParcels, activeCardTag, selectedParcelForDrawer, hoveredParcelTag, mapDisplayMode, showParcelsLayer, handleSelectParcelFromMap]);
+  }, [filteredParcels, activeCardTag, selectedParcelForDrawer, hoveredParcelTag, mapDisplayMode, showParcelsLayer, handleSelectParcelFromMap, registryPreferences.uppercaseNames, registryPreferences.areaPrecision]);
 
   // Measurement Tool Visualization
   useEffect(() => {
@@ -1818,8 +1827,9 @@ export const MapView: React.FC<MapViewProps> = ({
   const selectedBarangayOfficer = customizerBarangay ? lftAccounts.find((account) =>
     (account.assignedBarangays || []).some((name) => matchBarangay(name, customizerBarangay.name)) || matchBarangay(account.barangay, customizerBarangay.name)
   ) : undefined;
-  const barangayFocal = selectedBarangayOfficer?.name || selectedBarangayRecords.find((parcel) => parcel.focalPerson)?.focalPerson;
-  const barangayContact = selectedBarangayOfficer?.contactNumber || selectedBarangayRecords.find((parcel) => parcel.contactNumber)?.contactNumber;
+  const selectedBarangayProfile = customizerBarangay ? barangayProfiles[customizerBarangay.name]?.details : undefined;
+  const barangayFocal = selectedBarangayProfile?.focalPerson ?? (selectedBarangayOfficer?.name || selectedBarangayRecords.find((parcel) => parcel.focalPerson)?.focalPerson);
+  const barangayContact = selectedBarangayProfile?.contactNumber ?? (selectedBarangayOfficer?.contactNumber || selectedBarangayRecords.find((parcel) => parcel.contactNumber)?.contactNumber);
 
   return (
     <div
@@ -1830,7 +1840,7 @@ export const MapView: React.FC<MapViewProps> = ({
       }`}
     >
       {/* MAIN STACKED GIS LAYOUT CONTAINER */}
-      <div className={`flex flex-col gap-4 w-full ${isFullscreen ? 'flex-1 min-h-0' : ''}`}>
+      <div className={`relative flex flex-col gap-2 w-full ${isFullscreen ? 'flex-1 min-h-0' : ''}`}>
         {/* 1. TOP SECTION: ACTION BAR (Matching Picture 2 "+ Register Swine with GPS") */}
         {!isFullscreen && (
           <div className="flex items-center justify-between gap-3 px-1 py-1">
@@ -1838,7 +1848,12 @@ export const MapView: React.FC<MapViewProps> = ({
               type="button"
               onClick={() => {
                 if (onOpenAddParcelWithCoords) {
-                  onOpenAddParcelWithCoords({ lat: 10.538, lng: 125.172 });
+                  const center = mapInstanceRef.current?.getCenter();
+                  const lat = center?.lat ?? registryPreferences.mapLatitude;
+                  const lng = center?.lng ?? registryPreferences.mapLongitude;
+                  const barangay = detectBarangayFromCoordinates(lat, lng);
+                  if (barangay && canAccessBarangay(barangay)) onOpenAddParcelWithCoords({ lat, lng, barangay });
+                  else setActiveTool('drop_pin');
                 } else {
                   setActiveTool('drop_pin');
                 }
@@ -1869,7 +1884,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
         {/* 2. COLLAPSIBLE FARMER LANDHOLDINGS CAROUSEL / DRAWER */}
         {isFarmerListOpen && (
-          <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4 shadow-sm space-y-3 animate-in slide-in-from-top-3 duration-200">
+          <div className="absolute inset-x-2 bottom-2 z-[450] max-h-[45%] space-y-2 overflow-auto overscroll-contain rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="font-bold text-xs uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
@@ -1967,7 +1982,7 @@ export const MapView: React.FC<MapViewProps> = ({
                     <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2.5 mb-3">
                       <div className="min-w-0 flex-1">
                         <h4 className="font-bold text-sm text-slate-900 group-hover:text-blue-700 transition truncate">
-                          {parcel.raiserName}
+                          {formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)}
                         </h4>
                         <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
                           <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
@@ -1991,7 +2006,7 @@ export const MapView: React.FC<MapViewProps> = ({
                       <div className="bg-emerald-50/70 border border-emerald-100/80 p-2 rounded-lg flex items-center justify-between">
                         <span className="text-[10.5px] font-medium text-emerald-800">Total Lot Area:</span>
                         <span className="font-bold text-emerald-950 font-mono text-xs">
-                          {getParcelAreaHa(parcel) > 0 ? `${getParcelAreaHa(parcel).toFixed(2)} ha` : 'Not recorded'}
+                          {getParcelAreaHa(parcel) > 0 ? `${getParcelAreaHa(parcel).toFixed(registryPreferences.areaPrecision)} ha` : 'Not recorded'}
                         </span>
                       </div>
 
@@ -2059,7 +2074,7 @@ export const MapView: React.FC<MapViewProps> = ({
         {/* 3. MAIN SECTION: EXPANDED FULL-WIDTH LEAFLET GIS MAP CONTAINER */}
         <div
           className={`w-full ${
-            isFullscreen ? 'flex-1 min-h-0 h-full' : 'h-[calc(100vh-195px)] min-h-[540px]'
+            isFullscreen ? 'flex-1 min-h-0 h-full' : 'h-[calc(100dvh-155px)] min-h-[350px]'
           } bg-slate-950 border border-slate-200/90 rounded-2xl overflow-hidden shadow-lg relative`}
         >
           {/* FLOATING TOP GIS BAR (Matching Picture 2 Sleek Glassmorphism Header) */}
@@ -2461,7 +2476,7 @@ export const MapView: React.FC<MapViewProps> = ({
             {/* LEAFLET MAP ELEMENT */}
             <div
               ref={mapContainerRef}
-              className={`w-full h-full bg-slate-950 relative z-0 ${isFullscreen ? 'min-h-0' : 'min-h-[540px]'}`}
+              className={`w-full h-full bg-slate-950 relative z-0 min-h-0`}
             />
 
             {/* GIS MAP LEGEND (Bottom Right Floating Card, Matching Picture 2) */}
@@ -2581,7 +2596,7 @@ export const MapView: React.FC<MapViewProps> = ({
                         `Captured: ${digitizerPoints.length} point${digitizerPoints.length > 1 ? 's' : ''} • Need ${3 - digitizerPoints.length} more to form polygon`
                       ) : (
                         <>
-                          Area: <strong className="text-emerald-400 font-bold">{drawnAreaMetrics.hectares.toFixed(2)} ha</strong> ({Math.round(drawnAreaMetrics.sqMeters).toLocaleString()} m²) &bull; Centroid: <span className="font-mono text-slate-300">{calculatePolygonCentroid(digitizerPoints).lat.toFixed(5)}, {calculatePolygonCentroid(digitizerPoints).lng.toFixed(5)}</span> &bull; Brgy. <strong className="text-sky-300">{detectBarangayFromCoordinates(calculatePolygonCentroid(digitizerPoints).lat, calculatePolygonCentroid(digitizerPoints).lng)}</strong>
+                          Area: <strong className="text-emerald-400 font-bold">{drawnAreaMetrics.hectares.toFixed(registryPreferences.areaPrecision)} ha</strong> ({Math.round(drawnAreaMetrics.sqMeters).toLocaleString()} m²) &bull; Centroid: <span className="font-mono text-slate-300">{calculatePolygonCentroid(digitizerPoints).lat.toFixed(5)}, {calculatePolygonCentroid(digitizerPoints).lng.toFixed(5)}</span> &bull; Brgy. <strong className="text-sky-300">{detectBarangayFromCoordinates(calculatePolygonCentroid(digitizerPoints).lat, calculatePolygonCentroid(digitizerPoints).lng)}</strong>
                         </>
                       )}
                     </span>
@@ -2659,7 +2674,7 @@ export const MapView: React.FC<MapViewProps> = ({
                       </span>
                     </div>
                     <h4 className="font-black text-sm text-slate-900 mt-1 truncate">
-                      {selectedParcelForDrawer.raiserName}
+                      {formatRegistryName(selectedParcelForDrawer.raiserName, registryPreferences.uppercaseNames)}
                     </h4>
                   </div>
                   <button
@@ -2685,7 +2700,7 @@ export const MapView: React.FC<MapViewProps> = ({
                   <div className="bg-emerald-50/70 p-2.5 rounded-xl border border-emerald-200/70 flex flex-col justify-between">
                     <span className="text-[10px] font-semibold text-emerald-800 uppercase tracking-wider">Total Area</span>
                     <span className="font-bold text-emerald-800 font-mono text-sm mt-0.5">
-                      {getParcelAreaHa(selectedParcelForDrawer) > 0 ? `${getParcelAreaHa(selectedParcelForDrawer).toFixed(2)} ha` : 'Not recorded'}
+                      {getParcelAreaHa(selectedParcelForDrawer) > 0 ? `${getParcelAreaHa(selectedParcelForDrawer).toFixed(registryPreferences.areaPrecision)} ha` : 'Not recorded'}
                     </span>
                   </div>
 
