@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { LandingPage } from './components/LandingPage';
 import { PUBLIC_LAW_REPOSITORY_PATH, PublicLawRepositoryPage } from './views/PublicLawRepositoryPage';
+import { isPasswordRecoveryLocation, PasswordRecoveryPage } from './views/PasswordRecoveryPage';
 import { LoginModal } from './components/LoginModal';
 import { SignInToast } from './components/SignInToast';
 import { ParcelDetailModal } from './components/ParcelDetailModal';
@@ -1160,8 +1161,10 @@ const AppContent: React.FC = () => {
 };
 
 export function App() {
-  const isPublicLawPage = typeof window !== 'undefined'
-    && window.location.pathname.replace(/\/$/, '') === PUBLIC_LAW_REPOSITORY_PATH;
+  const path = typeof window !== 'undefined' ? window.location.pathname.replace(/\/$/, '') : '';
+  const isPublicLawPage = path === PUBLIC_LAW_REPOSITORY_PATH;
+
+  if (isPasswordRecoveryLocation) return <PasswordRecoveryPage />;
 
   return (
     <AppProvider syncPortalNavigation={!isPublicLawPage}>

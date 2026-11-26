@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { User, isAccountActive } from '../types';
 import { OfficialSealsTrio } from './Seals';
+import { PASSWORD_RECOVERY_PATH } from '../views/PasswordRecoveryPage';
 import { supabase } from '../supabase';
 import { supabaseDb } from '../utils/supabaseClient';
 import {
@@ -76,6 +77,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
   const [showCustomGoogleInput, setShowCustomGoogleInput] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
 
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [isSendingRecoveryEmail, setIsSendingRecoveryEmail] = useState(false);
+
   // Password Reset State
   const [verifiedIdentifier, setVerifiedIdentifier] = useState('');
   const [verifiedAccountName, setVerifiedAccountName] = useState('');
@@ -94,6 +98,30 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
   }, [isOpen]);
 
   if (!isOpen) return null;
+
+  const sendRecoveryEmail = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isSendingRecoveryEmail) return;
+    setIsSendingRecoveryEmail(true);
+    setError(null);
+    setInfoMessage(null);
+    try {
+      const redirectTo = new URL(PASSWORD_RECOVERY_PATH, window.location.origin).href;
+      const { error: recoveryError } = await supabase.auth.resetPasswordForEmail(
+        recoveryEmail.trim().toLowerCase(),
+        { redirectTo }
+      );
+      if (recoveryError) {
+        setError('Unable to send a reset email. Please try again later.');
+        return;
+      }
+      setInfoMessage('If an account exists for that address, check your inbox and spam folder for the reset link.');
+    } catch {
+      setError('Unable to send a reset email. Check your connection and try again.');
+    } finally {
+      setIsSendingRecoveryEmail(false);
+    }
+  };
 
   // Phone normalization & matching helpers
   const normalizeDigits = (val?: string): string => {
@@ -237,7 +265,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
       });
       if (signInError) {
         const wait = recordLoginFailure();
-        setError(wait > 0 ? `Too many failed attempts. Locked for ${wait}s.` : 'Invalid email or password.');
+        setError(wait > 0 ? `Too many failed attempts. Locked for ${wait}s.` : 'Invalid email or password. Use Forgot password to request a reset link.');
         return;
       }
       resetLoginRateLimit();
@@ -764,6 +792,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                       type="button"
                       onClick={() => {
                         setIsRecoveryFlow(true);
+                        setRecoveryEmail(username.includes('@') ? username.trim() : adminProfile.email || '');
                         setAuthMode('recovery');
                         setError(null);
                       }}
@@ -883,9 +912,22 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
                 </span>
               </div>
 
-              <div className="text-xs text-slate-600 leading-relaxed">
-                Select your preferred identity verification channel registered under the Central Admin roster:
-              </div>
+              <form onSubmit={sendRecoveryEmail} className="space-y-2 rounded-lg border border-slate-200 p-3">
+                <label className="block space-y-1 text-xs font-semibold text-slate-700">
+                  <span>Registered email address</span>
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={recoveryEmail}
+                    onChange={(event) => setRecoveryEmail(event.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </label>
+                <button type="submit" disabled={isSendingRecoveryEmail} className="rounded-md bg-blue-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">
+                  {isSendingRecoveryEmail ? 'Sending…' : 'Send password reset email'}
+                </button>
+              </form>
 
               <div className="space-y-3">
                 {/* Method 1: Google Account Verification */}

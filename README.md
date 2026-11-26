@@ -34,6 +34,11 @@ git push -u origin main
    - `GEMINI_API_KEY` = Your Google Gemini API Key (optional, for RiceSsistant AI Chatbot)
 5. Click **Deploy**.
 
+In Supabase **Authentication → URL Configuration**, add your deployed site’s
+`/reset-password` URL to **Redirect URLs**. In **Authentication → Users**,
+confirm that the registered Central Admin email has an Auth user. The sign-in
+form can email a reset link to an existing Auth user.
+
 ---
 
 ### Option 2: Local Development
