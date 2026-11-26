@@ -27,7 +27,6 @@ import {
   canUserManageLftAccounts,
   UserPermissions
 } from '../utils/rbac';
-import { hashPasswordSync, isHashedPassword } from '../utils/security';
 import { LegalDecree, DEFAULT_LEGAL_DECREES, normalizeDecreeList } from '../data/legalDecrees';
 import {
   FORM_SCHEMA_STORAGE_KEY,
@@ -221,9 +220,9 @@ interface AppContextType {
 
   // LFT Officer Accounts Management
   lftAccounts: LftAccount[];
-  addLftAccount: (account: Omit<LftAccount, 'id'>) => void;
-  updateLftAccount: (id: string, updated: Partial<LftAccount>) => void;
-  deleteLftAccount: (id: string) => void;
+  addLftAccount: (account: Omit<LftAccount, 'id'>) => Promise<boolean>;
+  updateLftAccount: (id: string, updated: Partial<LftAccount>) => Promise<boolean>;
+  deleteLftAccount: (id: string) => Promise<boolean>;
   resetLftAccounts: () => void;
   reorderLftAccounts: (accountsOrStartIndex: LftAccount[] | number, endIndex?: number) => void;
 
@@ -526,57 +525,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     const resolveAuthorizedSessionUser = async (accessToken: string): Promise<User | null> => {
       const { data: { user }, error } = await supabase.auth.getUser(accessToken);
       if (error || !user || user.is_anonymous) return null;
-      const userEmail = (user.email || '').trim().toLowerCase();
-      const userPhone = (user.phone || '').replace(/\D/g, '');
-      const identifier = userEmail || userPhone || user.id;
-      const hydrated = await supabaseDb.hydrateUserRole(identifier);
-
-      if (hydrated?.role === 'Barangay Focal Person') {
-        if (hydrated.status && !isAccountActive(hydrated.status)) {
-          await supabase.auth.signOut().catch(() => {});
-          return null;
-        }
-        return {
-          username: hydrated.username || userEmail.split('@')[0],
-          role: 'Barangay Focal Person',
-          name: hydrated.name || user.user_metadata?.full_name || 'LFT Field Officer',
-          title: hydrated.title || 'Local Farmer Technician (LFT)',
-          email: userEmail || hydrated.email,
-          contactNumber: hydrated.contactNumber || user.phone,
-          barangay: hydrated.barangay,
-          assignedBarangays: hydrated.assignedBarangays,
-          status: hydrated.status,
-          photoUrl: user.user_metadata?.avatar_url || hydrated.photoUrl
-        };
+      const staff = await supabaseDb.getStaffAccount();
+      if (!staff) {
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        return null;
       }
 
-      const cloudProfile = await supabaseDb.getSetting<{ email?: string; name?: string; title?: string; contactNumber?: string; office?: string; photoUrl?: string }>('silago_admin_profile');
-      const registeredAdminEmail = (cloudProfile?.email || 'admin@gmail.com').trim().toLowerCase();
-      const registeredAdminDigits = (cloudProfile?.contactNumber || '').replace(/\D/g, '');
-      const matchesAdminEmail = Boolean(userEmail && registeredAdminEmail && userEmail === registeredAdminEmail);
-      const matchesAdminPhone = Boolean(
-        userPhone.length >= 7 && registeredAdminDigits.length >= 7 && userPhone.slice(-9) === registeredAdminDigits.slice(-9)
-      );
-
-      if (matchesAdminEmail || matchesAdminPhone) {
+      if (staff.role === 'Central Admin') {
+        const profile = await supabaseDb.getSetting<Partial<User>>('silago_admin_profile');
         return {
-          username: 'admin',
-          role: 'Central Admin',
-          name: cloudProfile?.name || user.user_metadata?.full_name || 'Municipal Administrator',
-          title: cloudProfile?.title || 'Municipal Agriculture Administrator',
-          email: userEmail || cloudProfile?.email,
-          contactNumber: cloudProfile?.contactNumber || user.phone,
-          office: cloudProfile?.office || 'Silago Municipal Agriculture Office (DA-MAO)',
-          photoUrl: user.user_metadata?.avatar_url || cloudProfile?.photoUrl
+          ...staff,
+          name: profile?.name || staff.name,
+          title: profile?.title || staff.title,
+          email: user.email,
+          contactNumber: profile?.contactNumber || user.phone,
+          office: profile?.office || 'Silago Municipal Agriculture Office (DA-MAO)',
+          photoUrl: profile?.photoUrl || user.user_metadata?.avatar_url
         };
       }
-
-      // Unrecognized email/phone: do not escalate to Central Admin
-      await supabase.auth.signOut().catch(() => {});
-      return null;
+      return { ...staff, email: user.email || staff.email };
     };
 
     let authChange = 0;
+    let resolvedStaffId: string | undefined;
     const checkInitialSession = async () => {
       const change = authChange;
       try {
@@ -586,6 +557,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         if (session?.user) {
           const resolvedUser = await resolveAuthorizedSessionUser(session.access_token);
           if (isMounted && change === authChange && resolvedUser) {
+            resolvedStaffId = resolvedUser.id;
             setCurrentUser(resolvedUser);
             setActiveTab(resolvedUser.role === 'Central Admin' ? 'dashboard' : 'lft_dashboard');
           }
@@ -606,6 +578,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       if (!isMounted) return;
       if (event === 'SIGNED_OUT') {
         authChange++;
+        resolvedStaffId = undefined;
         setCurrentUser(null);
       } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.access_token) {
         const change = ++authChange;
@@ -614,6 +587,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
           try {
             const resolvedUser = await resolveAuthorizedSessionUser(session.access_token);
             if (isMounted && change === authChange) {
+              if (event === 'SIGNED_IN' && resolvedUser && resolvedUser.id !== resolvedStaffId) {
+                setActiveTab(resolvedUser.role === 'Central Admin' ? 'dashboard' : 'lft_dashboard');
+              }
+              resolvedStaffId = resolvedUser?.id;
               setCurrentUser(resolvedUser);
             }
           } catch (err) {
@@ -635,24 +612,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   // Supabase Realtime Connection Status
   const [realtimeStatus, setRealtimeStatus] = useState<'connected' | 'connecting' | 'reconnecting'>('connected');
   const [isRealtimeSyncing, setIsRealtimeSyncing] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (currentUser) {
-      // Live State Hydration on any device: verify and hydrate role directly from Supabase DB
-      if (currentUser.role !== 'Central Admin' && (currentUser.email || currentUser.username || currentUser.contactNumber)) {
-        const identifier = currentUser.email || currentUser.username || currentUser.contactNumber || '';
-        supabaseDb.hydrateUserRole(identifier).then((hydrated) => {
-          if (hydrated) {
-            if (hydrated.status && !isAccountActive(hydrated.status)) {
-              setCurrentUser(null);
-              return;
-            }
-            setCurrentUser((prev) => (prev ? { ...prev, ...hydrated } : null));
-          }
-        });
-      }
-    }
-  }, [currentUser?.email, currentUser?.username, setCurrentUser]);
 
   // Farm Parcels Database State (Pure Async Remote Supabase Source of Truth + Cached Persistence + Alphabetical A-Z)
   const [parcels, setParcels] = useState<FarmParcel[]>(() => {
@@ -744,6 +703,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     }
   }, [mapFarmerToParcel]);
 
+  useEffect(() => {
+    let active = true;
+    if (!currentUser) {
+      setLftAccounts([]);
+      return;
+    }
+    void supabaseDb.getLftAccounts().then((accounts) => {
+      if (active) setLftAccounts(accounts);
+    });
+    return () => { active = false; };
+  }, [currentUser?.id, currentUser?.role]);
+
   // Initial cloud fetch on mount
   useEffect(() => {
     fetchParcels();
@@ -757,19 +728,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         fetchParcels(),
         supabaseDb.getLftAccounts(),
       ]);
-      if (Array.isArray(cloudLfts)) {
-        setLftAccounts((prev) => {
-          if (cloudLfts.length === 0) return prev;
-          const prevPasswordByUsername = new Map(
-            prev.filter((a) => a.password).map((a) => [a.username.trim().toLowerCase(), a.password!])
-          );
-          return cloudLfts.map((acc) => {
-            if (acc.password) return acc;
-            const cachedPwd = prevPasswordByUsername.get(acc.username.trim().toLowerCase());
-            return cachedPwd ? { ...acc, password: cachedPwd } : acc;
-          });
-        });
-      }
+      setLftAccounts(cloudLfts);
     } catch (err) {
       console.warn('Manual sync note:', err);
     } finally {
@@ -865,16 +824,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     else if (key === 'silago_bagong_pilipinas_logo_url') { setBagongPilipinasLogoUrlState(value); try { if (value) localStorage.setItem('silago_bagong_pilipinas_logo_url', value); else localStorage.removeItem('silago_bagong_pilipinas_logo_url'); } catch {} }
     else if (key === 'silago_portal_banner_url') { setPortalBannerUrlState(value); try { if (value) localStorage.setItem('silago_portal_banner_url', value); else localStorage.removeItem('silago_portal_banner_url'); } catch {} }
     else if (key === 'silago_admin_profile' && value) setAdminProfile(value);
-    else if (key.startsWith('silago_lft_password_') && value) {
-      const uname = key.slice('silago_lft_password_'.length).trim().toLowerCase();
-      if (uname) {
-        setLftAccounts((prev) =>
-          prev.map((acc) =>
-            acc.username.trim().toLowerCase() === uname ? { ...acc, password: String(value) } : acc
-          )
-        );
-      }
-    }
     else if (key === 'silago_office_contact_info' && value) setOfficeContactInfoState(value);
     else if (key === 'silago_rice_varieties' && Array.isArray(value)) setVarieties(value);
     else if (key === 'silago_ecosystems' && Array.isArray(value)) setEcosystems(value);
@@ -1400,48 +1349,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     });
   };
 
-  const addLftAccount = (accountData: Omit<LftAccount, 'id'>) => {
-    if (!canUserManageLftAccounts(currentUser)) return;
-    const hashedPassword = accountData.password ? hashPasswordSync(accountData.password) : undefined;
-    const newAccount: LftAccount = {
-      ...accountData,
-      ...(hashedPassword ? { password: hashedPassword } : {}),
-      id: `lft-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+  const addLftAccount = async (accountData: Omit<LftAccount, 'id'>) => {
+    if (!canUserManageLftAccounts(currentUser)) return false;
+    const account: LftAccount = { ...accountData, id: crypto.randomUUID() };
+    try {
+      await supabaseDb.upsertLftAccount(account);
+      setLftAccounts((prev) => [account, ...prev.filter((item) => item.id !== account.id)]);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const updateLftAccount = async (id: string, updates: Partial<LftAccount>) => {
+    const existing = lftAccounts.find((account) => account.id === id);
+    if (!existing) return false;
+    const isAdmin = canUserManageLftAccounts(currentUser);
+    const isSelf = currentUser?.role === 'Barangay Focal Person' && currentUser.id === id;
+    if (!isAdmin && !isSelf) return false;
+    const account = isAdmin ? { ...existing, ...updates, id } : {
+      ...existing,
+      name: updates.name ?? existing.name,
+      contactNumber: updates.contactNumber ?? existing.contactNumber,
+      photoUrl: updates.photoUrl ?? existing.photoUrl
     };
-    setLftAccounts((prev) => [newAccount, ...prev.filter((a) => a.id !== newAccount.id)]);
-    supabaseDb.upsertLftAccount(newAccount);
-    if (hashedPassword && newAccount.username) {
-      supabaseDb.setSetting(`silago_lft_password_${newAccount.username.trim().toLowerCase()}`, hashedPassword);
+    try {
+      await (isAdmin ? supabaseDb.upsertLftAccount(account) : supabaseDb.updateOwnLftProfile(account));
+      setLftAccounts((prev) => prev.map((item) => item.id === id ? account : item));
+      return true;
+    } catch {
+      return false;
     }
   };
 
-  const updateLftAccount = (id: string, updatedFields: Partial<LftAccount>) => {
-    const isSelfUpdate = currentUser && currentUser.role !== 'Central Admin' && lftAccounts.some((a) => a.id === id && a.username === currentUser.username);
-    if (!canUserManageLftAccounts(currentUser) && !isSelfUpdate) return;
-    const safeFields: Partial<LftAccount> = { ...updatedFields };
-    if (safeFields.password && !isHashedPassword(safeFields.password)) {
-      safeFields.password = hashPasswordSync(safeFields.password);
-    }
-    const existing = lftAccounts.find((acc) => acc.id === id);
-    const targetUpdated: LftAccount | null = existing ? { ...existing, ...safeFields } : null;
-    setLftAccounts((prev) =>
-      prev.map((acc) => (acc.id === id ? { ...acc, ...safeFields } : acc))
-    );
-    if (targetUpdated) {
-      supabaseDb.upsertLftAccount(targetUpdated);
-      if (safeFields.password && targetUpdated.username) {
-        supabaseDb.setSetting(`silago_lft_password_${targetUpdated.username.trim().toLowerCase()}`, safeFields.password);
-      }
-    }
-  };
-
-  const deleteLftAccount = (id: string) => {
-    if (!canUserManageLftAccounts(currentUser)) return;
-    const target = lftAccounts.find((acc) => acc.id === id);
-    setLftAccounts((prev) => prev.filter((acc) => acc.id !== id));
-    supabaseDb.deleteLftAccount(id);
-    if (target?.username) {
-      supabaseDb.removeSetting(`silago_lft_password_${target.username.trim().toLowerCase()}`);
+  const deleteLftAccount = async (id: string) => {
+    if (!canUserManageLftAccounts(currentUser)) return false;
+    try {
+      await supabaseDb.deleteLftAccount(id);
+      setLftAccounts((prev) => prev.filter((account) => account.id !== id));
+      return true;
+    } catch {
+      return false;
     }
   };
 

@@ -207,7 +207,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     }
 
     const isAdmin = isCentralAdminIdentifier(cleanUser);
-    let matchedLft = findMatchingLftAccount(cleanUser);
+    const matchedLft = findMatchingLftAccount(cleanUser);
     const testAccountIdentifiers = ['silago.test', 'silago.test@local.invalid'];
     const isTestAccount = testAccountIdentifiers.includes(cleanUser.toLowerCase());
 
@@ -243,9 +243,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     setIsSubmittingLogin(true);
     setError('');
     try {
-      if (!isAdmin && !matchedLft && !cleanUser.includes('@')) {
-        matchedLft = findMatchingLftAccount(cleanUser, await supabaseDb.getLftAccounts());
-      }
       if (matchedLft && !isAccountActive(matchedLft.status)) {
         setError('Account inactive. Contact the Central Admin.');
         return;
@@ -266,6 +263,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
       if (signInError) {
         const wait = recordLoginFailure();
         setError(wait > 0 ? `Too many failed attempts. Locked for ${wait}s.` : 'Invalid email or password. Use Forgot password to request a reset link.');
+        return;
+      }
+      const staff = await supabaseDb.getStaffAccount();
+      if (!staff) {
+        await supabase.auth.signOut({ scope: 'local' });
+        setError('This sign-in is confirmed, but no active staff account is linked. Contact the registry administrator.');
         return;
       }
       resetLoginRateLimit();
@@ -290,40 +293,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     setIsGoogleLoading(true);
     setError(null);
 
-    // Strict check against registered Central Admin email
-    const isAdminEmail = Boolean(
-      adminProfile.email && cleanEmail === adminProfile.email.trim().toLowerCase()
-    );
-
-    // Verify against pre-registered LFT accounts
-    const matchedLft = lftAccounts.find((acc) => {
-      const em = (acc.email || '').trim().toLowerCase();
-      return Boolean(em && em === cleanEmail);
-    });
-
-    if (!isAdminEmail && !matchedLft) {
-      setIsGoogleLoading(false);
-      setError(
-        'Kini nga Google account wala marehistro sa Silago Rice Registry. Palihug pakigkita sa MAO Admin.'
-      );
-      return;
-    }
-
-    // 2. Account Status Validation if matched
-    if (matchedLft && !isAccountActive(matchedLft.status)) {
-      setIsGoogleLoading(false);
-      setError(
-        'Account Inactive: Your account has been disabled or is pending activation by Central Admin.'
-      );
-      return;
-    }
-
     try {
       // Initiate real Supabase Google OAuth redirect; session is provisioned ONLY after verified callback
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin
+          redirectTo: window.location.origin,
+          queryParams: { login_hint: cleanEmail }
         }
       });
 
@@ -391,42 +367,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     setIsSendingOtp(true);
     setError(null);
 
-    // Verify strictly against configured Central Admin phone number (no hardcoded bypass patterns)
-    const isCoordinatorNum = Boolean(
-      adminProfile.contactNumber && matchesPhoneNumber(cleanNumber, adminProfile.contactNumber)
-    );
-
-    // Verify against LFT registered roster
-    const matchedLft = lftAccounts.find((acc) =>
-      matchesPhoneNumber(cleanNumber, acc.contactNumber)
-    );
-
-    // Strict Phone Number Whitelist / Database Login Restriction:
-    // If not found in registered records (admin or LFT), immediately block and show required error message
-    if (!isCoordinatorNum && !matchedLft) {
-      setIsSendingOtp(false);
-      setError(
-        'Kini nga mobile number wala marehistro sa Silago Rice Registry system. Palihug pakigkita sa MAO Admin.'
-      );
-      return;
-    }
-
-    // Account Status Validation: Disabled LFTs cannot receive or use OTP
-    if (matchedLft && !isAccountActive(matchedLft.status)) {
-      setIsSendingOtp(false);
-      setError(
-        'Account Inactive: Your account has been disabled or is pending activation by Central Admin.'
-      );
-      return;
-    }
-
     const fullPhoneNumber = `${countryCode}${cleanNumber.startsWith('0') ? cleanNumber.slice(1) : cleanNumber}`;
 
     try {
       // Supabase SMS OTP dispatch
       const { error: otpError } = await supabase.auth.signInWithOtp({
         phone: fullPhoneNumber,
-        options: { channel: 'sms' }
+        options: { channel: 'sms', shouldCreateUser: false }
       });
 
       if (otpError) {
@@ -545,23 +492,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     const cleanNumber = phoneNumber.replace(/\D/g, '');
     const fullPhoneNumber = `${countryCode}${cleanNumber.startsWith('0') ? cleanNumber.slice(1) : cleanNumber}`;
 
-    const isCoordinatorNum = Boolean(
-      adminProfile.contactNumber && matchesPhoneNumber(cleanNumber, adminProfile.contactNumber)
-    );
-
-    const matchedLft = lftAccounts.find((acc) =>
-      matchesPhoneNumber(cleanNumber, acc.contactNumber)
-    );
-
-    // Strict Phone Number Whitelist / Database Login Restriction:
-    if (!isCoordinatorNum && !matchedLft) {
-      setIsVerifyingOtp(false);
-      setError(
-        'Kini nga mobile number wala marehistro sa Silago Rice Registry system. Palihug pakigkita sa MAO Admin.'
-      );
-      return;
-    }
-
     try {
       const { error: verifyErr } = await supabase.auth.verifyOtp({
         phone: fullPhoneNumber,
@@ -576,19 +506,21 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
         return;
       }
 
+      const staff = await supabaseDb.getStaffAccount();
+      if (!staff) {
+        await supabase.auth.signOut({ scope: 'local' });
+        setIsVerifyingOtp(false);
+        setError('No active staff account is linked to this Auth user.');
+        return;
+      }
+
       resetLoginRateLimit();
       setIsVerifyingOtp(false);
 
       // If user came via password recovery:
       if (isRecoveryFlow) {
         setVerifiedIdentifier(fullPhoneNumber);
-        setVerifiedAccountName(
-          isCoordinatorNum
-            ? (adminProfile.name || 'Central Admin')
-            : matchedLft
-            ? matchedLft.name
-            : `Personnel (${fullPhoneNumber.slice(-4)})`
-        );
+        setVerifiedAccountName(staff.name);
         setAuthMode('set_new_password');
         setNewPassword('');
         setConfirmPassword('');
@@ -596,59 +528,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
         return;
       }
 
-      // Normal sign in: Provision verified staff session
-      if (isCoordinatorNum) {
-        const adminUser: User = {
-          username: 'admin',
-          role: 'Central Admin',
-          name: adminProfile.name || 'Central Admin',
-          title: adminProfile.title || 'Municipal Agriculture Administrator',
-          email: adminProfile.email || 'admin@silago.gov.ph',
-          contactNumber: `${countryCode} ${phoneNumber}`,
-          office: adminProfile.office || 'Silago Municipal Agriculture Office (DA-MAO)',
-          photoUrl: adminProfile.photoUrl || ''
-        };
-        setCurrentUser(adminUser);
-        onClose();
-        onSuccess?.(adminUser);
-        return;
-      }
-
-      if (matchedLft) {
-        if (!isAccountActive(matchedLft.status)) {
-          setError(
-            'Account Inactive: Your account has been disabled or is pending activation by Central Admin.'
-          );
-          return;
-        }
-
-        const assignedBrgys =
-          matchedLft.assignedBarangays && matchedLft.assignedBarangays.length > 0
-            ? matchedLft.assignedBarangays
-            : matchedLft.barangay.split(',').map((s) => s.trim()).filter(Boolean);
-
-        const lftUser: User = {
-          username: matchedLft.username,
-          role: 'Barangay Focal Person',
-          name: matchedLft.name,
-          barangay: matchedLft.barangay,
-          assignedBarangays: assignedBrgys,
-          title: 'Local Farmer Technician (LFT)',
-          contactNumber: `${countryCode} ${phoneNumber}`,
-          email: matchedLft.email || `${matchedLft.username}@silago-agriculture.gov.ph`,
-          photoUrl: matchedLft.photoUrl
-        };
-
-        setCurrentUser(lftUser);
-        onClose();
-        onSuccess?.(lftUser);
-        return;
-      }
-
-      setError(
-        'Kini nga mobile number wala marehistro sa Silago Rice Registry system. Palihug pakigkita sa MAO Admin.'
-      );
-      return;
+      // The app resolves the authorized role from the staff roster.
     } catch (err: any) {
       setIsVerifyingOtp(false);
       setError(err?.message || 'Verification failed. Please check the code and try again.');

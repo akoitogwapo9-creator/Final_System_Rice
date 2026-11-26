@@ -34,10 +34,25 @@ git push -u origin main
    - `GEMINI_API_KEY` = Your Google Gemini API Key (optional, for RiceSsistant AI Chatbot)
 5. Click **Deploy**.
 
-In Supabase **Authentication → URL Configuration**, add your deployed site’s
-`/reset-password` URL to **Redirect URLs**. In **Authentication → Users**,
-confirm that the registered Central Admin email has an Auth user. The sign-in
-form can email a reset link to an existing Auth user.
+#### Supabase staff setup
+
+1. In **Authentication → Users**, create or invite the Central Admin
+   (`admin@gmail.com`), and confirm the account email.
+2. On the existing project, apply [supabase_schema.sql](supabase_schema.sql)
+   and then the [staff accounts migration](supabase/migrations/202611260001_staff_accounts.sql)
+   in the Supabase SQL Editor before deploying the updated client. The
+   migration links the confirmed admin user and upgrades the existing LFT roster.
+   If the admin Auth user is created later, run the migration's
+   `INSERT INTO public.admin_accounts` statement again.
+3. In **Authentication → URL Configuration**, add the deployed
+   `/reset-password` URL to **Redirect URLs**.
+4. Create or invite each LFT in **Authentication → Users** using the same
+   email as their **LFT Accounts** roster entry. Officers sign in using that
+   email. Existing phone-only Auth users need their UUID linked in
+   `lft_technicians.auth_user_id` for role lookup.
+
+Staff tables store profiles and assignments. Supabase Auth manages passwords
+and password reset emails.
 
 ---
 

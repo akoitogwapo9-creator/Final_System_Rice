@@ -237,8 +237,9 @@ export function normalizeFarmParcel(row: any): FarmParcel {
 export function normalizeLftAccount(row: any): LftAccount {
   if (!row) return {} as LftAccount;
   const id = String(row.id || row.username || `lft-${Date.now()}`);
-  const assigned = Array.isArray(row.assignedBarangays || row.assigned_barangays)
-    ? (row.assignedBarangays || row.assigned_barangays)
+  const savedAssignments = row.assignedBarangays || row.assigned_barangays;
+  const assigned = Array.isArray(savedAssignments) && savedAssignments.length
+    ? savedAssignments
     : (row.barangay ? String(row.barangay).split(',').map((s: string) => s.trim()) : []);
 
   return {
@@ -1032,7 +1033,7 @@ export function sanitizeLftPayload(account: LftAccount) {
     name: norm.name || '',
     username: norm.username || '',
     barangay: norm.barangay || '',
-    assigned_barangays: Array.isArray(norm.assignedBarangays) ? norm.assignedBarangays : [],
+    assigned_barangays: norm.assignedBarangays || [],
     contact_number: norm.contactNumber || '',
     email: norm.email || '',
     terrain: norm.terrain || 'Lowland & Rice Sector',
@@ -1368,133 +1369,64 @@ export const supabaseDb = {
    * Fetch LFT technician accounts from Supabase
    */
   async getLftAccounts(): Promise<LftAccount[]> {
-    try {
-      const { data, error } = await supabaseClient
-        .from('lft_technicians')
-        .select('*');
+    const { data, error } = await supabaseClient
+      .from('lft_technicians')
+      .select('id, username, name, barangay, assigned_barangays, contact_number, email, terrain, area_ha, status, photo_url, puroks');
+    if (error) return [];
+    return (data || []).map(normalizeLftAccount);
+  },
 
-      if (!error && Array.isArray(data) && data.length > 0) {
-        const accounts = data.map(normalizeLftAccount);
-        try {
-          const passwordMap = new Map<string, string>();
-          const tablesToCheck = [
-            ...(isSystemSettingsAvailable ? ['system_settings'] : []),
-            ...(isAppSettingsAvailable ? ['app_settings'] : []),
-          ];
-          for (const tbl of tablesToCheck) {
-            const { data: pwdRows } = await supabaseClient
-              .from(tbl)
-              .select('key, value')
-              .ilike('key', 'silago_lft_password_%');
-            if (Array.isArray(pwdRows)) {
-              for (const row of pwdRows) {
-                if (row?.key && row?.value) {
-                  const uname = String(row.key).slice('silago_lft_password_'.length).trim().toLowerCase();
-                  if (uname && !passwordMap.has(uname)) {
-                    passwordMap.set(uname, String(row.value));
-                  }
-                }
-              }
-            }
-          }
-          return accounts.map((acc) => {
-            const storedHash = acc.password || passwordMap.get(acc.username.trim().toLowerCase());
-            return storedHash ? { ...acc, password: storedHash } : acc;
-          });
-        } catch {
-          return accounts;
-        }
-      }
-    } catch (e) {
-      console.warn('Supabase LFT technicians fetch notice:', e);
-    }
-
-    return [];
+  async updateOwnLftProfile(account: LftAccount): Promise<void> {
+    const { error } = await supabaseClient.rpc('registry_update_lft_profile', {
+      display_name: account.name,
+      phone: account.contactNumber,
+      photo: account.photoUrl ?? null
+    });
+    if (error) throw error;
   },
 
   /**
    * Upsert an LFT account
    */
   async upsertLftAccount(account: LftAccount): Promise<void> {
-    if (!await hasSupabaseWriteSession()) return;
-    const norm = normalizeLftAccount(account);
-    const payload = sanitizeLftPayload(norm);
-
-    try {
-      const { error } = await supabaseClient.from('lft_technicians').upsert(payload, { onConflict: 'id' });
-      if (error) {
-        console.error('Supabase LFT upsert error:', error.message);
-      }
-    } catch (e) {
-      console.warn('Supabase LFT persist notice:', e);
-    }
-
-    const { password: _omittedPwd, ...safeBroadcastAccount } = norm;
-    await broadcastRealtimeChange('lft_upsert', { account: safeBroadcastAccount });
+    if (!await hasSupabaseWriteSession()) throw new Error('Sign in to manage LFT accounts.');
+    const { error } = await supabaseClient
+      .from('lft_technicians')
+      .upsert(sanitizeLftPayload(account), { onConflict: 'id' });
+    if (error) throw error;
   },
 
-  /**
-   * Delete an LFT account
-   */
   async deleteLftAccount(id: string): Promise<void> {
-    if (!await hasSupabaseWriteSession()) return;
-    try {
-      const { error } = await supabaseClient.from('lft_technicians').delete().eq('id', id);
-      if (error) {
-        console.warn('Supabase LFT delete notice:', error.message);
-      }
-    } catch (e) {
-      console.warn('Supabase LFT delete notice:', e);
-    }
-
-    await broadcastRealtimeChange('lft_delete', { id });
+    if (!await hasSupabaseWriteSession()) throw new Error('Sign in to manage LFT accounts.');
+    const { data, error } = await supabaseClient.from('lft_technicians').delete().eq('id', id).select('id');
+    if (error || !data?.length) throw error || new Error('Supabase did not delete the LFT account.');
   },
 
   /**
    * Live State Hydration: Fetches active role, assigned barangays and permissions from database
    */
-  async hydrateUserRole(identifier: string): Promise<Partial<User> | null> {
-    try {
-      const clean = (identifier || '').trim().toLowerCase();
-      if (!clean || clean.length < 2) return null;
-      const cleanDigits = clean.replace(/\D/g, '');
-
-      // Fetch technician rows and match strictly in JS to prevent PostgREST filter injection or substring spoofing
-      const { data, error } = await supabaseClient
-        .from('lft_technicians')
-        .select('*');
-
-      if (!error && Array.isArray(data) && data.length > 0) {
-        const lft = data.find((row: any) => {
-          const email = String(row.email || '').trim().toLowerCase();
-          const username = String(row.username || '').trim().toLowerCase();
-          const phone = String(row.contact_number || row.contactNumber || '').replace(/\D/g, '');
-          return (
-            (email && email === clean) ||
-            (username && username === clean) ||
-            (cleanDigits.length >= 7 && phone.length >= 7 && phone.slice(-9) === cleanDigits.slice(-9))
-          );
-        });
-        if (!lft) return null;
-        const assigned = lft.assigned_barangays || lft.assignedBarangays || (lft.barangay ? lft.barangay.split(',').map((b: string) => b.trim()) : []);
-        return {
-          name: lft.name,
-          username: lft.username,
-          role: 'Barangay Focal Person',
-          title: 'Local Farmer Technician (LFT)',
-          barangay: lft.barangay,
-          assignedBarangays: assigned,
-          office: `Brgy. ${lft.barangay} / Silago Sector`,
-          scope: `Jurisdiction: ${lft.barangay}`,
-          status: lft.status,
-          contactNumber: lft.contact_number || lft.contactNumber,
-          email: lft.email
-        };
-      }
-    } catch (e) {
-      console.warn('User role hydration notice:', e);
+  async getStaffAccount(): Promise<User | null> {
+    const { data, error } = await supabaseClient.rpc('registry_staff_account');
+    if (error) throw error;
+    if (data?.role === 'Central Admin') {
+      return { id: data.id, username: 'admin', role: data.role, name: data.name, title: data.title };
     }
-    return null;
+    if (data?.role !== 'Barangay Focal Person') return null;
+    const account = normalizeLftAccount(data);
+    return {
+      id: account.id,
+      username: account.username,
+      role: data.role,
+      name: account.name,
+      title: 'Local Farmer Technician (LFT)',
+      barangay: account.barangay,
+      assignedBarangays: account.assignedBarangays,
+      office: `Brgy. ${account.barangay} / Silago Sector`,
+      status: account.status,
+      contactNumber: account.contactNumber,
+      email: account.email,
+      photoUrl: account.photoUrl
+    };
   },
 
   /**

@@ -94,40 +94,10 @@ export const AccountsView: React.FC = () => {
     email: '',
     puroks: 22,
     photoUrl: '',
-    password: '',
-    confirmPassword: ''
   });
 
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [passwordError, setPasswordError] = useState<string | null>(null);
-
-  // Real-time security rules criteria
-  const passwordCriteria = useMemo(() => {
-    const pwd = formData.password || '';
-    const confirm = formData.confirmPassword || '';
-    return {
-      minLength: pwd.length >= 8,
-      hasUppercase: /[A-Z]/.test(pwd),
-      hasLowercase: /[a-z]/.test(pwd),
-      hasNumber: /[0-9]/.test(pwd),
-      matchesConfirm: pwd.length > 0 && pwd === confirm
-    };
-  }, [formData.password, formData.confirmPassword]);
-
-  const isPasswordValid = useMemo(() => {
-    // If editing and password field is left empty, existing password is maintained
-    if (editingAccount && !formData.password && !formData.confirmPassword) {
-      return true;
-    }
-    return (
-      passwordCriteria.minLength &&
-      passwordCriteria.hasUppercase &&
-      passwordCriteria.hasLowercase &&
-      passwordCriteria.hasNumber &&
-      passwordCriteria.matchesConfirm
-    );
-  }, [editingAccount, formData.password, formData.confirmPassword, passwordCriteria]);
+  const [saveError, setSaveError] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
@@ -197,9 +167,7 @@ export const AccountsView: React.FC = () => {
 
   const handleOpenAdd = () => {
     setEditingAccount(null);
-    setPasswordError(null);
-    setShowPassword(false);
-    setShowConfirmPassword(false);
+    setSaveError('');
     setFormData({
       name: '',
       barangay: 'Salvacion, Laguna, Pd2, Pd1, Hingatungan',
@@ -211,17 +179,13 @@ export const AccountsView: React.FC = () => {
       email: '',
       puroks: 15,
       photoUrl: '',
-      password: '',
-      confirmPassword: ''
     });
     setIsModalOpen(true);
   };
 
   const handleOpenEdit = (acc: LftAccount) => {
     setEditingAccount(acc);
-    setPasswordError(null);
-    setShowPassword(false);
-    setShowConfirmPassword(false);
+    setSaveError('');
     setFormData({
       name: acc.name,
       barangay: acc.barangay,
@@ -233,8 +197,6 @@ export const AccountsView: React.FC = () => {
       email: acc.email || `${acc.username.replace('@', '')}@silago-agriculture.gov.ph`,
       puroks: acc.puroks || 20,
       photoUrl: acc.photoUrl || '',
-      password: '',
-      confirmPassword: ''
     });
     setIsModalOpen(true);
   };
@@ -340,102 +302,60 @@ export const AccountsView: React.FC = () => {
     }));
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setPasswordError(null);
+    if (isSaving) return;
+    setSaveError('');
+    const name = formData.name.trim();
+    const email = formData.email.trim().toLowerCase();
+    const assignedBarangays = parseAssignedBarangays(formData.barangay);
 
-    if (!formData.name.trim()) {
-      alert('Please provide the LFT Officer Full Name.');
+    if (!name || !email || !assignedBarangays.length) {
+      setSaveError('Enter the officer name, registered email, and at least one assigned barangay.');
       return;
     }
-    if (!formData.barangay.trim() || parseAssignedBarangays(formData.barangay).length === 0) {
-      alert('Please check at least one specific barangay that this LFT officer serves.');
+    if (lftAccounts.some((account) => account.id !== editingAccount?.id && account.email?.toLowerCase() === email)) {
+      setSaveError('This email is already assigned to another LFT account.');
       return;
     }
 
-    // Password validation guard
-    if (!editingAccount) {
-      // New account creation requires full password criteria
-      if (!formData.password) {
-        setPasswordError('Kinahanglan magbutang og Account Password alang sa bag-ong LFT officer.');
+    const account = {
+      name,
+      email,
+      assignedBarangays,
+      barangay: assignedBarangays.join(', '),
+      username: formData.username.trim() || email.split('@')[0],
+      contactNumber: formData.contactNumber.trim(),
+      terrain: formData.terrain,
+      areaHa: Number(formData.areaHa) || 0,
+      status: formData.status,
+      puroks: Number(formData.puroks) || 20,
+      photoUrl: formData.photoUrl.trim() || undefined
+    };
+    setIsSaving(true);
+    try {
+      const saved = editingAccount
+        ? await updateLftAccount(editingAccount.id, account)
+        : await addLftAccount(account);
+      if (!saved) {
+        setSaveError('Supabase could not save this LFT account. Check your connection and admin access.');
         return;
       }
-      if (!passwordCriteria.minLength) {
-        setPasswordError('Ang password kinahanglan labing menos 8 ka karakter ang gitas-on.');
-        return;
-      }
-      if (!passwordCriteria.hasUppercase) {
-        setPasswordError('Ang password kinahanglan adunay labing menos usa ka UPPERCASE nga letra (A-Z).');
-        return;
-      }
-      if (!passwordCriteria.hasLowercase) {
-        setPasswordError('Ang password kinahanglan adunay labing menos usa ka lowercase nga letra (a-z).');
-        return;
-      }
-      if (!passwordCriteria.hasNumber) {
-        setPasswordError('Ang password kinahanglan adunay labing menos usa ka numero (0-9).');
-        return;
-      }
-      if (!passwordCriteria.matchesConfirm) {
-        setPasswordError('Wala motakdo ang Password ug Confirm Password.');
-        return;
-      }
-    } else if (formData.password || formData.confirmPassword) {
-      // Editing account with password change specified
-      if (!passwordCriteria.minLength || !passwordCriteria.hasUppercase || !passwordCriteria.hasLowercase || !passwordCriteria.hasNumber) {
-        setPasswordError('Ang bag-ong password kinahanglan labing menos 8 ka karakter, may uppercase, lowercase, ug numero.');
-        return;
-      }
-      if (!passwordCriteria.matchesConfirm) {
-        setPasswordError('Wala motakdo ang Password ug Confirm Password.');
-        return;
-      }
+      showToast(editingAccount ? 'LFT account updated.' : 'LFT roster entry created.');
+      setIsModalOpen(false);
+      setEditingAccount(null);
+    } finally {
+      setIsSaving(false);
     }
-
-    if (editingAccount) {
-      const updatePayload: Partial<LftAccount> = {
-        name: formData.name.trim(),
-        barangay: formData.barangay,
-        username: formData.username.trim(),
-        contactNumber: formData.contactNumber.trim(),
-        terrain: formData.terrain,
-        areaHa: Number(formData.areaHa) || 0,
-        status: formData.status,
-        email: formData.email.trim(),
-        puroks: Number(formData.puroks) || 20,
-        photoUrl: formData.photoUrl.trim() || undefined
-      };
-      if (formData.password) {
-        updatePayload.password = formData.password;
-      }
-      updateLftAccount(editingAccount.id, updatePayload);
-      showToast(`Malampusong na-update ang account para kang ${formData.name.trim()}!`);
-    } else {
-      addLftAccount({
-        name: formData.name.trim(),
-        barangay: formData.barangay,
-        username: formData.username.trim() || `${formData.name.toLowerCase().replace(/[^a-z0-9]/g, '')}.lft`,
-        contactNumber: formData.contactNumber.trim() || '0917-000-0000',
-        terrain: formData.terrain,
-        areaHa: Number(formData.areaHa) || 0,
-        status: formData.status,
-        email: formData.email.trim(),
-        puroks: Number(formData.puroks) || 20,
-        photoUrl: formData.photoUrl.trim() || undefined,
-        password: formData.password
-      });
-      showToast('Malampusong nahimo ang LFT Account!');
-    }
-
-    setIsModalOpen(false);
-    setEditingAccount(null);
-    setPasswordError(null);
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!deletingAccountId) return;
     const target = lftAccounts.find((a) => a.id === deletingAccountId);
-    deleteLftAccount(deletingAccountId);
+    if (!await deleteLftAccount(deletingAccountId)) {
+      showToast('Supabase could not delete this LFT account.');
+      return;
+    }
     setDeletingAccountId(null);
     showToast(`Deleted LFT account for ${target ? target.name : 'officer'}`);
   };
@@ -850,142 +770,10 @@ export const AccountsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* PASSWORD & CONFIRM PASSWORD SECTION WITH LIVE VALIDATION CHECKLIST */}
-              <div className="p-3.5 bg-slate-50/95 rounded-xl border border-slate-200 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
-                    <Lock className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>{editingAccount ? 'Account Security & Password (Optional Update)' : 'Account Password & Security *'}</span>
-                  </div>
-                  {editingAccount && (
-                    <span className="text-[10px] text-slate-500 italic">
-                      Ibilin nga blangko kung dili usbon
-                    </span>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {/* Password Input */}
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 text-xs flex items-center justify-between">
-                      <span>Account Password {!editingAccount && <span className="text-red-500">*</span>}</span>
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showPassword ? 'text' : 'password'}
-                        value={formData.password}
-                        onChange={(e) => {
-                          setFormData({ ...formData, password: e.target.value });
-                          setPasswordError(null);
-                        }}
-                        placeholder="Kinahanglan labing menos 8 ka karakter"
-                        className="w-full pl-3 pr-9 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs font-mono"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 rounded-md transition cursor-pointer"
-                        title={showPassword ? 'Hide password' : 'Show password'}
-                      >
-                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Confirm Password Input */}
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 text-xs flex items-center justify-between">
-                      <span>Confirm Password {!editingAccount && <span className="text-red-500">*</span>}</span>
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showConfirmPassword ? 'text' : 'password'}
-                        value={formData.confirmPassword}
-                        onChange={(e) => {
-                          setFormData({ ...formData, confirmPassword: e.target.value });
-                          setPasswordError(null);
-                        }}
-                        placeholder="I-type pag-usab ang password"
-                        className="w-full pl-3 pr-9 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs font-mono"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 rounded-md transition cursor-pointer"
-                        title={showConfirmPassword ? 'Hide password' : 'Show password'}
-                      >
-                        {showConfirmPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Live Visual Security Checklist */}
-                {(!editingAccount || formData.password.length > 0 || formData.confirmPassword.length > 0) && (
-                  <div className="p-2.5 bg-white rounded-lg border border-slate-200/90 shadow-2xs space-y-1.5 text-[11px]">
-                    <span className="font-bold text-slate-700 block text-[10.5px] uppercase tracking-wider">
-                      Security Rules &amp; Live Checklist:
-                    </span>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                      {/* Criteria 1: Min 8 chars */}
-                      <div className={`flex items-center gap-1.5 transition-colors ${
-                        passwordCriteria.minLength ? 'text-emerald-700 font-bold' : 'text-slate-400'
-                      }`}>
-                        <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center shrink-0 text-[9px] font-black ${
-                          passwordCriteria.minLength ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-500'
-                        }`}>
-                          {passwordCriteria.minLength ? '✓' : '•'}
-                        </div>
-                        <span>Labing menos 8 ka karakter</span>
-                      </div>
-
-                      {/* Criteria 2: Uppercase */}
-                      <div className={`flex items-center gap-1.5 transition-colors ${
-                        passwordCriteria.hasUppercase ? 'text-emerald-700 font-bold' : 'text-slate-400'
-                      }`}>
-                        <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center shrink-0 text-[9px] font-black ${
-                          passwordCriteria.hasUppercase ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-500'
-                        }`}>
-                          {passwordCriteria.hasUppercase ? '✓' : '•'}
-                        </div>
-                        <span>Adunay uppercase nga letra (A-Z)</span>
-                      </div>
-
-                      {/* Criteria 3: Number */}
-                      <div className={`flex items-center gap-1.5 transition-colors ${
-                        passwordCriteria.hasNumber ? 'text-emerald-700 font-bold' : 'text-slate-400'
-                      }`}>
-                        <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center shrink-0 text-[9px] font-black ${
-                          passwordCriteria.hasNumber ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-500'
-                        }`}>
-                          {passwordCriteria.hasNumber ? '✓' : '•'}
-                        </div>
-                        <span>Adunay numero (0-9)</span>
-                      </div>
-
-                      {/* Criteria 4: Match Confirm */}
-                      <div className={`flex items-center gap-1.5 transition-colors ${
-                        passwordCriteria.matchesConfirm ? 'text-emerald-700 font-bold' : 'text-slate-400'
-                      }`}>
-                        <div className={`w-3.5 h-3.5 rounded-full flex items-center justify-center shrink-0 text-[9px] font-black ${
-                          passwordCriteria.matchesConfirm ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-500'
-                        }`}>
-                          {passwordCriteria.matchesConfirm ? '✓' : '•'}
-                        </div>
-                        <span>Parehas ang Password ug Confirm Password</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Password Error Alert Message */}
-                {passwordError && (
-                  <div className="flex items-center gap-2 p-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-semibold animate-in fade-in duration-150">
-                    <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
-                    <span>{passwordError}</span>
-                  </div>
-                )}
-              </div>
+              <p className="text-xs text-slate-600">
+                The officer signs in through Supabase Auth with this email. Create or invite the Auth user in the Supabase project.
+              </p>
+              {saveError && <p role="alert" className="text-xs text-red-700">{saveError}</p>}
 
               {/* Profile Picture URL Field */}
               <div className="space-y-1">
@@ -1144,6 +932,7 @@ export const AccountsView: React.FC = () => {
                   <label className="font-bold text-slate-700">Official Municipal Email</label>
                   <input
                     type="email"
+                    required
                     value={formData.email}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     placeholder="e.g. wella.bongon@silago-agriculture.gov.ph"
@@ -1162,15 +951,15 @@ export const AccountsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={!isPasswordValid}
+                  disabled={isSaving}
                   className={`px-5 py-2 font-bold rounded-xl shadow-xs transition cursor-pointer text-xs flex items-center gap-1.5 ${
-                    isPasswordValid
+                    !isSaving
                       ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
                       : 'bg-slate-300 text-slate-500 cursor-not-allowed opacity-70'
                   }`}
                 >
                   <Lock className="w-3.5 h-3.5" />
-                  <span>{editingAccount ? 'Save Changes' : 'Create LFT Account'}</span>
+                  <span>{isSaving ? 'Saving…' : editingAccount ? 'Save Changes' : 'Create LFT Account'}</span>
                 </button>
               </div>
             </form>
