@@ -445,7 +445,10 @@ const BARANGAY_PROFILES_KEY = 'silago_barangay_profiles';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNavigation?: boolean }> = ({
+  children,
+  syncPortalNavigation = true
+}) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   const [barangayProfiles, setBarangayProfiles] = useState<BarangayProfiles>(() => {
@@ -501,6 +504,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const setActiveTab = useCallback((tab: PortalTab) => {
     setActiveTabState(tab);
+    if (!syncPortalNavigation) return;
     try {
       if (typeof window !== 'undefined') {
         writeSessionActiveTab(tab);
@@ -509,7 +513,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         window.history.replaceState({}, '', url.toString());
       }
     } catch {}
-  }, []);
+  }, [syncPortalNavigation]);
 
   // Track initial auth check loading status
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);

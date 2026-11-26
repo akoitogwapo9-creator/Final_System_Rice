@@ -2,11 +2,9 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { BARANGAYS, getBarangayLabel, getBarangayZone } from '../data/barangays';
 import { DECREE_CATEGORIES, LegalDecree } from '../data/legalDecrees';
-import { Barangay, FarmParcel, PortalTab } from '../types';
+import { Barangay, PortalTab } from '../types';
 import { SilagoSeal, BagOngSilagoLogo, OfficialSealsTrio } from './Seals';
-import { BarangayDetailModal } from './BarangayDetailModal';
-import { ParcelDetailModal } from './ParcelDetailModal';
-import { ParcelDetailErrorBoundary } from './ParcelDetailErrorBoundary';
+import { PublicBarangayDialog } from './PublicBarangayDialog';
 import {
   ArrowRight,
   Shield,
@@ -25,6 +23,7 @@ import {
   Scale,
   Search
 } from 'lucide-react';
+import { PUBLIC_LAW_REPOSITORY_PATH } from '../views/PublicLawRepositoryPage';
 import { PWAInstallButton } from './common/PWAInstallButton';
 
 interface LandingPageProps {
@@ -33,7 +32,6 @@ interface LandingPageProps {
     tab: PortalTab,
     subTab?: 'profile' | 'municipal' | 'featured_card' | 'display' | 'media' | 'landing'
   ) => void;
-  onSelectBarangayForMap?: (barangay: Barangay) => void;
 }
 
 /**
@@ -83,8 +81,7 @@ function getEcosystemBadgeStyle(ecosystem?: string) {
 
 export const LandingPage: React.FC<LandingPageProps> = ({
   onOpenLogin,
-  onNavigateToPortalTab,
-  onSelectBarangayForMap
+  onNavigateToPortalTab
 }) => {
   const {
     currentUser,
@@ -95,12 +92,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     officeContactInfo,
     municipalBranding,
     landingPageConfig,
-    legalDecrees,
-    permissions
+    legalDecrees
   } = useApp();
 
   const [selectedBarangayModal, setSelectedBarangayModal] = useState<Barangay | null>(null);
-  const [selectedParcelModal, setSelectedParcelModal] = useState<FarmParcel | null>(null);
   const [selectedDecreeModal, setSelectedDecreeModal] = useState<LegalDecree | null>(null);
   const [decreeCategory, setDecreeCategory] = useState<string>('All Documents');
   const [decreeQuery, setDecreeQuery] = useState<string>('');
@@ -146,7 +141,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       return {};
     }
   };
-  const [savedSettings, setSavedSettings] = useState<Record<string, any>>(getSavedSettings);
+  const [savedSettings] = useState<Record<string, any>>(getSavedSettings);
 
   const liveBarangays = useMemo(() => {
     return BARANGAYS.map((b) => {
@@ -165,26 +160,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       };
     });
   }, [savedSettings]);
-
-  const handleUpdateBarangay = (name: string, updates: Partial<Barangay>) => {
-    if (!permissions.isCentralAdmin) return;
-    setSavedSettings((prev) => ({
-      ...prev,
-      [name]: {
-        ...prev[name],
-        focalPerson: updates.focalPerson,
-        contactNumber: updates.contactNumber,
-        zone: updates.terrain,
-        puroks: updates.puroks,
-        areaHa: updates.totalAreaHa,
-        irrigatedAreaHa: updates.irrigatedAreaHa,
-        rainfedAreaHa: updates.rainfedAreaHa,
-        centerLat: updates.lat,
-        centerLng: updates.lng,
-      }
-    }));
-    setSelectedBarangayModal((prev) => (prev && prev.name === name ? { ...prev, ...updates } : prev));
-  };
 
   // Barangay filter: ALL, COASTAL, INLAND
   const [barangayFilter, setBarangayFilter] = useState<'ALL' | 'COASTAL' | 'INLAND'>('ALL');
@@ -756,21 +731,22 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           {filteredBarangays.map((b) => {
             const ecoStyle = getEcosystemBadgeStyle(b.terrain);
             return (
-              <div
+              <button
+                type="button"
                 key={b.name}
                 onClick={() => setSelectedBarangayModal(b)}
-                className="bg-white border border-gov-line rounded p-4 hover:border-gov-green transition cursor-pointer flex flex-col justify-between space-y-3 group"
+                className="bg-white text-left border border-gov-line rounded p-4 hover:border-gov-green transition cursor-pointer flex flex-col justify-between space-y-3 group"
               >
                 {/* Top: Name & Dynamic Ecosystem Status Dot */}
-                <div className="flex items-start justify-between gap-2">
-                  <h4 className="font-semibold text-xs sm:text-sm text-gov-ink group-hover:text-gov-green transition">
+                <span className="flex items-start justify-between gap-2">
+                  <span className="font-semibold text-xs sm:text-sm text-gov-ink group-hover:text-gov-green transition">
                     {getBarangayLabel(b.name, barangayProfiles)}
-                  </h4>
+                  </span>
                   <span className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1 transition-all ${ecoStyle.dotClass}`} />
-                </div>
+                </span>
 
                 {/* Bottom: Puroks & Dynamic Ecosystem Pill Badge */}
-                <div className="flex items-center justify-between text-xs pt-2 border-t border-gov-line/60">
+                <span className="flex items-center justify-between text-xs pt-2 border-t border-gov-line/60">
                   <span className="text-gov-muted font-medium">
                     {b.puroks ?? (b as any).purokCount ?? 7} Puroks
                   </span>
@@ -778,8 +754,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     <span className="text-xs leading-none">{ecoStyle.icon}</span>
                     <span>{b.terrain}</span>
                   </span>
-                </div>
-              </div>
+                </span>
+              </button>
             );
           })}
         </div>
@@ -857,15 +833,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   className="pl-8 pr-3 py-2 w-56 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-emerald-500 focus:outline-none"
                 />
               </div>
-              <button
-                type="button"
-                onClick={() => onNavigateToPortalTab('legal_decrees')}
+              <a
+                href={PUBLIC_LAW_REPOSITORY_PATH}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#173b2c] hover:bg-[#123b2b] text-white text-xs font-bold transition shadow-xs cursor-pointer"
               >
                 <FileText className="w-3.5 h-3.5 text-lime-300" />
                 <span>Open Full Law Repository</span>
                 <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+              </a>
             </div>
           </div>
 
@@ -1080,29 +1055,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       )}
 
       {/* Modals */}
-      <BarangayDetailModal
-        barangay={selectedBarangayModal}
-        parcels={parcels}
-        onClose={() => setSelectedBarangayModal(null)}
-        onSelectParcel={(p) => setSelectedParcelModal(p)}
-        onViewOnMap={(b) => {
-          if (onSelectBarangayForMap) onSelectBarangayForMap(b);
-          onNavigateToPortalTab('map');
-        }}
-        onUpdateBarangay={handleUpdateBarangay}
-        canEdit={permissions.isCentralAdmin}
-      />
-
-      {selectedParcelModal && (
-        <ParcelDetailErrorBoundary onClose={() => setSelectedParcelModal(null)}>
-          <ParcelDetailModal
-            parcel={selectedParcelModal}
-            onClose={() => setSelectedParcelModal(null)}
-          />
-        </ParcelDetailErrorBoundary>
+      {selectedBarangayModal && (
+        <PublicBarangayDialog
+          barangay={selectedBarangayModal}
+          onClose={() => setSelectedBarangayModal(null)}
+        />
       )}
 
-      {/* Legal Decree Full Reader Modal */}
       {selectedDecreeModal && (
         <div
           role="dialog"
@@ -1155,17 +1114,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
             </div>
             <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedDecreeModal(null);
-                  onNavigateToPortalTab('legal_decrees');
-                }}
+              <a
+                href={PUBLIC_LAW_REPOSITORY_PATH}
                 className="text-xs font-bold text-emerald-700 hover:text-emerald-900 inline-flex items-center gap-1 cursor-pointer"
               >
-                <span>Open Law Repository in Portal</span>
+                <span>Open Full Law Repository</span>
                 <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+              </a>
               <button
                 type="button"
                 onClick={() => setSelectedDecreeModal(null)}

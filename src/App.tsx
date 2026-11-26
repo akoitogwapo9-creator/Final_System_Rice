@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { LandingPage } from './components/LandingPage';
+import { PUBLIC_LAW_REPOSITORY_PATH, PublicLawRepositoryPage } from './views/PublicLawRepositoryPage';
 import { LoginModal } from './components/LoginModal';
 import { SignInToast } from './components/SignInToast';
 import { ParcelDetailModal } from './components/ParcelDetailModal';
@@ -163,7 +164,7 @@ const AppContent: React.FC = () => {
         const url = new URL(window.location.href);
         const tabParam = url.searchParams.get('tab');
         const routeTabs: Record<string, PortalTab> = {
-          '/asf_ordinance': 'legal_decrees', '/barangays': 'barangays', '/account': 'account',
+          '/barangays': 'barangays', '/account': 'account',
           '/admin/registry-form-customization': 'registry_form', '/admin/user-accounts': 'accounts',
           '/gis-measure': 'gis_measure', '/subsidies': 'subsidies',
           '/map': 'map', '/dashboard': 'dashboard', '/lft_dashboard': 'lft_dashboard',
@@ -433,7 +434,6 @@ const AppContent: React.FC = () => {
           <LandingPage
             onOpenLogin={handleOpenLogin}
             onNavigateToPortalTab={(tab, subTab) => handleNavigateToPortalTab(tab as PortalTab, subTab)}
-            onSelectBarangayForMap={(b) => setFocusBarangayForMap(b)}
           />
         </div>
       ) : (
@@ -1160,9 +1160,12 @@ const AppContent: React.FC = () => {
 };
 
 export function App() {
+  const isPublicLawPage = typeof window !== 'undefined'
+    && window.location.pathname.replace(/\/$/, '') === PUBLIC_LAW_REPOSITORY_PATH;
+
   return (
-    <AppProvider>
-      <AppContent />
+    <AppProvider syncPortalNavigation={!isPublicLawPage}>
+      {isPublicLawPage ? <PublicLawRepositoryPage /> : <AppContent />}
     </AppProvider>
   );
 }

@@ -67,7 +67,7 @@ function PageBanner({ icon: Icon, title, subtitle, children }: { icon: React.Ele
 
 const decreeCategories = DECREE_CATEGORIES;
 
-export function LegalDecreesView() {
+export function LegalDecreesView({ readOnly = false }: { readOnly?: boolean }) {
   const {
     legalDecrees: docs,
     addLegalDecree,
@@ -75,7 +75,7 @@ export function LegalDecreesView() {
     resetLegalDecrees,
     permissions
   } = useApp();
-  const isCentralAdmin = permissions.isCentralAdmin;
+  const isCentralAdmin = !readOnly && permissions.isCentralAdmin;
   const [category, setCategory] = useState('All Documents');
   const [query, setQuery] = useState('');
   const [keyword, setKeyword] = useState('');

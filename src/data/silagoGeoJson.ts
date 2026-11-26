@@ -146,11 +146,14 @@ export const SILAGO_OFFICIAL_GEOJSON: SilagoFeatureCollection = {
 export function normalizeBarangayName(name: string): string {
   if (!name) return '';
   return name
+    .trim()
     .toLowerCase()
     .replace(/^brgy\.?\s*/i, '')
     .replace(/^barangay\s*/i, '')
     .replace(/poblacion\s+district\s+/i, 'pob. district ')
     .replace(/pob\s+district\s+/i, 'pob. district ')
+    .replace(/^pob\. district 1$/, 'pob. district i')
+    .replace(/^pob\. district 2$/, 'pob. district ii')
     .replace(/pd\s*1/i, 'pob. district i')
     .replace(/pob\s*1/i, 'pob. district i')
     .replace(/pd\s*2/i, 'pob. district ii')
@@ -169,13 +172,12 @@ export function findSilagoBarangayFeature(name: string): SilagoGeoJSONFeature | 
   if (!name) return undefined;
   const norm = normalizeBarangayName(name);
 
-  return SILAGO_OFFICIAL_GEOJSON.features.find((f) => {
-    const featureNorm = normalizeBarangayName(f.properties.name);
-    return (
-      featureNorm === norm ||
-      featureNorm.includes(norm) ||
-      norm.includes(featureNorm) ||
-      (f.properties.id && norm.includes(f.properties.id))
-    );
-  });
+  const features = SILAGO_OFFICIAL_GEOJSON.features;
+  return features.find((f) => normalizeBarangayName(f.properties.name) === norm)
+    ?? features.find((f) => {
+      const featureNorm = normalizeBarangayName(f.properties.name);
+      return featureNorm.includes(norm)
+        || norm.includes(featureNorm)
+        || (f.properties.id && norm.includes(f.properties.id));
+    });
 }
