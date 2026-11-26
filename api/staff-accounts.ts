@@ -56,6 +56,8 @@ export default async function handler(req: any, res: any) {
 
     const name = text(body.name);
     const email = text(body.email, 255).toLowerCase();
+    const status = ['Active / Certified', 'Pending Activation', 'Disabled / Inactive'].includes(body.status)
+      ? body.status : 'Active / Certified';
     const assigned: string[] = Array.isArray(body.assignedBarangays) ? [...new Set<string>(body.assignedBarangays)] : [];
     const allowed = new Set<string>(OFFICIAL_15_BARANGAYS);
     if (!name || !validEmail.test(email) || !validUsername.test(username) || reservedUsernames.has(username) ||
@@ -85,7 +87,7 @@ export default async function handler(req: any, res: any) {
       barangay: assigned.join(', '), assigned_barangays: assigned,
       contact_number: text(body.contactNumber, 30), terrain: text(body.terrain),
       area_ha: Math.max(0, Number(body.areaHa) || 0), puroks: Math.max(0, Math.trunc(Number(body.puroks) || 0)),
-      photo_url: text(body.photoUrl, 2048), status: 'Active / Certified'
+      photo_url: text(body.photoUrl, 2048), status
     });
     if (rosterError) {
       const check = await service.from('lft_technicians').select('id').eq('id', id).maybeSingle();

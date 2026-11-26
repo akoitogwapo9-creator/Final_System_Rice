@@ -40,7 +40,7 @@ import {
   Lock,
   Compass
 } from 'lucide-react';
-import { BarangayDetailModal } from '../components/BarangayDetailModal';
+import { EditBarangayDialog } from '../components/EditBarangayDialog';
 import { OfficeCustomFieldsGrid } from '../components/OfficeFormPrimitives';
 import {
   DEFAULT_FORM_SECTIONS,
@@ -500,6 +500,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   const rows = useMemo(() => {
     return BARANGAYS.map((barangay, index) => {
       const saved = savedSettingsState[barangay.name] || {};
+      const profile = barangayProfiles[barangay.name];
       const officer = lftAccounts.find((account) =>
         (account.assignedBarangays || []).some((name) => matchBarangay(name, barangay.name)) ||
         matchBarangay(account.barangay, barangay.name)
@@ -515,10 +516,10 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
         lng: Number(saved.centerLng ?? barangay.lng),
         focalPerson: saved.focalPerson || officer?.name || barangay.focalPerson || '',
         contactNumber: saved.contactNumber || officer?.contactNumber || barangay.contactNumber || '',
-        ...barangayProfiles[barangay.name]?.details,
+        ...profile?.details,
         farmCount,
         assigned: Boolean(officer),
-        hasSavedBoundary: Boolean(barangayProfiles[barangay.name]?.boundary?.length || savedPointsState[barangay.name]?.length)
+        hasSavedBoundary: Boolean(profile?.boundary === undefined ? savedPointsState[barangay.name]?.length : profile.boundary?.length)
       };
     });
   }, [lftAccounts, parcels, savedSettingsState, savedPointsState, barangayProfiles]);
@@ -624,7 +625,10 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
       setSavedPointsState(allPoints);
 
       const allSettings = getSavedSettings();
-      delete allSettings[b.name];
+      if (allSettings[b.name]) {
+        delete allSettings[b.name].areaHa;
+        delete allSettings[b.name].perimeterKm;
+      }
       localStorage.setItem('silago_gis_measure_settings', JSON.stringify(allSettings));
       setSavedSettingsState(allSettings);
 
@@ -644,7 +648,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
 
   const [editingBarangayModal, setEditingBarangayModal] = useState<Barangay | null>(null);
 
-  const handleUpdateBarangay = (name: string, updates: Partial<Barangay>) => {
+  const handleUpdateBarangay = (name: string, updates: Partial<Barangay>, synced: boolean) => {
     if (!permissions.isCentralAdmin) return;
     try {
       const allSettings = getSavedSettings();
@@ -655,8 +659,6 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
         zone: updates.terrain,
         puroks: updates.puroks,
         areaHa: updates.totalAreaHa,
-        irrigatedAreaHa: updates.irrigatedAreaHa,
-        rainfedAreaHa: updates.rainfedAreaHa,
         centerLat: updates.lat,
         centerLng: updates.lng
       };
@@ -665,12 +667,12 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
 
       if (activeBarangay.name === name) {
         setActiveBarangay((prev) => ({ ...prev, ...updates }));
-        if (updates.lat && updates.lng) {
+        if (updates.lat !== undefined && updates.lng !== undefined) {
           setCenterCoords([updates.lat, updates.lng]);
         }
       }
 
-      setNotice(`Barangay ${name} details updated successfully.`);
+      setNotice(synced ? `Barangay ${getBarangayLabel(name, barangayProfiles)} updated.` : 'Barangay saved on this device. Cloud sync is pending.');
       setTimeout(() => setNotice(''), 4000);
     } catch {
       // ignore
@@ -698,6 +700,12 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
               <Sparkles className="w-3.5 h-3.5 text-emerald-700" />
               <span>Load Official Boundary</span>
             </button>
+            {rows.find((row) => row.name === activeBarangay.name)?.hasSavedBoundary && (
+              <button type="button" onClick={() => handleDeleteBoundary(activeBarangay)}
+                className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                Reset Saved Boundary
+              </button>
+            )}
             <button
               type="button"
               onClick={handleUndoPoint}
@@ -799,15 +807,13 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
 
         {/* Table */}
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-left text-xs">
+          <table className="w-full min-w-[740px] text-left text-xs">
             <thead className="border-b border-slate-200 bg-slate-50/70 text-[10px] font-bold uppercase tracking-wider text-slate-600">
               <tr>
                 <th className="px-4 py-3">Barangay Name</th>
-                <th className="px-4 py-3">Classification / Zone</th>
-                <th className="px-4 py-3">Boundary &amp; Measured Area</th>
-                <th className="px-4 py-3">Center Coordinates</th>
-                <th className="px-4 py-3">Extension Focal Person</th>
-                <th className="px-4 py-3">Contact</th>
+                <th className="px-4 py-3">Zone &amp; Terrain</th>
+                <th className="px-4 py-3">Area &amp; Coordinates</th>
+                <th className="px-4 py-3">Focal Person &amp; Contact</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -815,38 +821,21 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
               {filteredRows.map((b) => (
                 <tr key={b.name} className="transition hover:bg-slate-50/80">
                   <td className="px-4 py-3.5 font-semibold text-slate-900">
-                    Brgy. {getBarangayLabel(b.name, barangayProfiles)}
+                    {getBarangayLabel(b.name, barangayProfiles)}
                   </td>
                   <td className="px-4 py-3.5">
                     <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${zoneColors[getBarangayZone(b.name, barangayProfiles)] || 'border-slate-200 bg-slate-50 text-slate-700'}`}>
                       {getBarangayZone(b.name, barangayProfiles)}
                     </span>
+                    <div className="mt-1 text-slate-600">{b.terrain}</div>
                   </td>
                   <td className="px-4 py-3.5">
-                    {b.hasSavedBoundary ? (
-                      <div>
-                        <div className="font-semibold text-slate-800 text-xs">{b.totalAreaHa ? `${b.totalAreaHa.toLocaleString()} ha` : '—'}</div>
-                        <div className="text-[10px] text-slate-400">Measured boundary</div>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleSelectBarangay(b)}
-                        className="text-emerald-700 hover:underline inline-flex items-center gap-1 font-medium text-xs cursor-pointer"
-                      >
-                        <Pencil className="w-3 h-3" />
-                        <span>Plot boundary on GIS</span>
-                      </button>
-                    )}
+                    <div className="font-semibold text-slate-800">{b.totalAreaHa == null ? '—' : `${b.totalAreaHa.toLocaleString()} ha`}</div>
+                    <div className="mt-1 font-mono text-[11px] text-slate-600">{b.lat.toFixed(5)}, {b.lng.toFixed(5)}</div>
                   </td>
-                  <td className="px-4 py-3.5 font-mono text-[11px] text-slate-600">
-                    {b.lat.toFixed(5)}°N, {b.lng.toFixed(5)}°E
-                  </td>
-                  <td className="px-4 py-3.5 text-slate-700 font-medium">
-                    {b.focalPerson || 'Rolando Santos'}
-                  </td>
-                  <td className="px-4 py-3.5 text-slate-500 font-mono text-[11px]">
-                    {b.contactNumber || '0945-123-4561'}
+                  <td className="px-4 py-3.5">
+                    <div className="font-medium text-slate-800">{b.focalPerson || '—'}</div>
+                    <div className="mt-1 text-slate-600">{b.contactNumber || '—'}</div>
                   </td>
                   <td className="px-4 py-3.5 text-right">
                     <div className="inline-flex items-center gap-1">
@@ -865,15 +854,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
                         className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg px-2.5 py-1 transition cursor-pointer"
                       >
                         <Compass className="w-3 h-3 text-emerald-700" />
-                        <span>Measure GIS</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteBoundary(b)}
-                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                        title="Reset boundary"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>GIS Boundary</span>
                       </button>
                     </div>
                   </td>
@@ -881,7 +862,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
               ))}
               {filteredRows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-xs text-slate-400">
+                  <td colSpan={5} className="px-4 py-10 text-center text-xs text-slate-400">
                     No barangays match your search.
                   </td>
                 </tr>
@@ -892,17 +873,14 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
       </section>
 
       {editingBarangayModal && (
-        <BarangayDetailModal
+        <EditBarangayDialog
+          key={editingBarangayModal.name}
           barangay={editingBarangayModal}
-          parcels={parcels}
           onClose={() => setEditingBarangayModal(null)}
-          onSelectParcel={(_p) => {}}
-          onViewOnMap={(b) => {
+          onSave={(updates, synced) => {
+            handleUpdateBarangay(editingBarangayModal.name, updates, synced);
             setEditingBarangayModal(null);
-            handleSelectBarangay(b);
           }}
-          onUpdateBarangay={handleUpdateBarangay}
-          canEdit={true}
         />
       )}
     </div>

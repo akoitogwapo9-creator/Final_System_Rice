@@ -1,3 +1,4 @@
+import { defaultBarangayPublicSector, getBarangayLabel, getBarangayPublicSector, getCoverageDescription, getPublicSectorLabel, OFFICIAL_15_BARANGAYS, PublicBarangaySector } from '../data/barangays';
 import { DEFAULT_REGISTRY_PREFERENCES, MAP_LAYER_OPTIONS, normalizeRegistryPreferences, RegistryPreferences } from '../data/registryPreferences';
 import React, { useState, useRef, useEffect } from 'react';
 import { DEFAULT_LANDING_PAGE_CONFIG, DEFAULT_MUNICIPAL_BRANDING, DEFAULT_OFFICE_CONTACT_INFO, useApp } from '../context/AppContext';
@@ -52,7 +53,7 @@ interface SettingsViewProps {
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding }) => {
   const {
-    currentUser, registryPreferences, saveRegistryPreferences, seasons, isOnline, isRealtimeSyncing, offlineQueueCount, syncOfflineQueue, syncWithSupabase, resetParcels, flushAdminSettings, flushBarangayProfiles, getPendingSettings,
+    currentUser, updatePublicBarangaySectors, registryPreferences, saveRegistryPreferences, seasons, isOnline, isRealtimeSyncing, offlineQueueCount, syncOfflineQueue, syncWithSupabase, resetParcels, flushAdminSettings, flushBarangayProfiles, getPendingSettings,
     updateCurrentUserProfile,
     updateCurrentUserPassword,
     adminProfile,
@@ -127,24 +128,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
     setSettingsDraft((previous) => ({ ...previous, [key]: value }));
 
 
+  const [sectorDraft, setSectorDraft] = useState<Record<string, PublicBarangaySector>>({});
+
   // Landing Page Configuration Form State
   const [landingForm, setLandingForm] = useState<LandingPageConfig>(() => ({
-    ...landingPageConfig
+    ...landingPageConfig, coverageDesc: getCoverageDescription(landingPageConfig.coverageDesc)
   }));
 
   useEffect(() => {
     if (landingPageConfig) {
       setLandingForm({
         ...landingPageConfig,
+        coverageDesc: getCoverageDescription(landingPageConfig.coverageDesc),
         mandateCards: Array.isArray(landingPageConfig.mandateCards) ? [...landingPageConfig.mandateCards] : []
       });
     }
   }, [landingPageConfig]);
 
-  const handleSaveLandingPage = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const saveLandingCoverage = async () => {
     updateLandingPageConfig(landingForm);
-    showToast('success', 'Landing Page badges, headline, portal cards, and mandate cards saved successfully!');
+    if (!Object.keys(sectorDraft).length) return true;
+    const synced = await updatePublicBarangaySectors(sectorDraft);
+    setSectorDraft((draft) => Object.fromEntries(Object.entries(draft).filter(([name, sector]) => sectorDraft[name] !== sector)));
+    return synced;
+  };
+
+  const handleSaveLandingPage = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!isCentralAdmin) return;
+    const profilesSynced = await saveLandingCoverage();
+    const contentSynced = await flushAdminSettings();
+    showToast('success', profilesSynced && contentSynced ? 'Landing page settings saved.' : 'Saved on this device. Cloud sync is pending.');
   };
 
   const handleResetLandingPage = () => {
@@ -1202,7 +1216,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
 
   const preferenceGroups = {
     municipal: ['activeSeason', 'agriculturistName', 'agriculturistTitle'],
-    landing: ['showAnnouncement', 'showBarangayDirectory', 'showLegalRepository'],
+    landing: ['showBarangayDirectory', 'showLegalRepository'],
     gis: ['mapLayer', 'mapLatitude', 'mapLongitude', 'mapZoom', 'areaPrecision', 'parcelPrefix'],
     display: ['dateFormat', 'uppercaseNames']
   } as const;
@@ -1227,7 +1241,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
       setBrandingForm({ ...brandingForm, ...DEFAULT_MUNICIPAL_BRANDING, silagoSealUrl: brandingForm.silagoSealUrl, bagOngSilagoLogoUrl: brandingForm.bagOngSilagoLogoUrl, daLogoUrl: brandingForm.daLogoUrl });
       setContactForm(DEFAULT_OFFICE_CONTACT_INFO);
     }
-    if (activeSubTab === 'landing') setLandingForm(DEFAULT_LANDING_PAGE_CONFIG);
+    if (activeSubTab === 'landing') {
+      setLandingForm(DEFAULT_LANDING_PAGE_CONFIG);
+      setSectorDraft(Object.fromEntries(OFFICIAL_15_BARANGAYS.map((name) => [name, defaultBarangayPublicSector(name)])));
+    }
     if (activeSubTab === 'display') setLanguageDraft('EN');
     if (activeSubTab === 'media') { mediaActions.current?.reset(); return; }
     showToast('success', 'Defaults loaded. Save All Changes to apply them.');
@@ -1242,14 +1259,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
         updateMunicipalBranding(brandingForm);
         updateOfficeContactInfo(contactForm);
       }
-      if (activeSubTab === 'landing') updateLandingPageConfig(landingForm);
+      const coverageSynced = activeSubTab !== 'landing' || await saveLandingCoverage();
       if (activeSubTab === 'display') setLanguage(languageDraft);
       const normalized = normalizeRegistryPreferences(settingsDraft);
       const changes = Object.fromEntries(preferenceKeys.map((key) => [key, normalized[key]]));
       setSettingsDraft((draft) => ({ ...draft, ...changes }));
       const synced = await saveRegistryPreferences(changes);
       const contentSynced = await flushAdminSettings();
-      showToast('success', synced && contentSynced ? 'Settings saved.' : 'Settings saved on this device. Cloud sync is pending.');
+      showToast('success', synced && contentSynced && coverageSynced ? 'Settings saved.' : 'Settings saved on this device. Cloud sync is pending.');
     } catch {
       showToast('error', 'Settings could not be saved. Please try again.');
     } finally {
@@ -1344,7 +1361,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
         <h2 className="font-bold text-blue-950">Public Landing Page Visibility</h2>
         <div className="flex flex-wrap gap-4 text-sm">
           {([
-            ['showAnnouncement', 'Announcement banner'],
             ['showBarangayDirectory', 'Barangay directory'],
             ['showLegalRepository', 'Law repository section']
           ] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2"><input type="checkbox" checked={settingsDraft[key]} onChange={(e) => changePreference(key, e.target.checked)} />{label}</label>)}
@@ -1742,45 +1758,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
                 onNotify={showToast}
               />
 
-              {/* Announcement Banner */}
-              <div className="p-4 bg-slate-50/70 rounded-2xl border border-slate-200 space-y-3">
-                <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">
-                  Top Announcement Ticker
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                  <div className="sm:col-span-3 space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Notice Tag</label>
-                    <input
-                      type="text"
-                      value={landingForm.topNoticeTag}
-                      onChange={(e) => setLandingForm({ ...landingForm, topNoticeTag: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
-                      placeholder="Official Notice"
-                    />
-                  </div>
-                  <div className="sm:col-span-6 space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Notice Announcement Text</label>
-                    <input
-                      type="text"
-                      value={landingForm.topNoticeText}
-                      onChange={(e) => setLandingForm({ ...landingForm, topNoticeText: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
-                      placeholder="2026 Wet Season RSBSA Georeferencing & Palay Monitoring active across all 15 Silago Barangays."
-                    />
-                  </div>
-                  <div className="sm:col-span-3 space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Link Button Label</label>
-                    <input
-                      type="text"
-                      value={landingForm.topNoticeLinkText}
-                      onChange={(e) => setLandingForm({ ...landingForm, topNoticeLinkText: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
-                      placeholder="Explore 15 Barangays →"
-                    />
-                  </div>
-                </div>
-              </div>
-
               {/* Badges & Headlines */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
@@ -1920,8 +1897,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
                   <Layers className="w-4 h-4" />
                 </div>
                 <div>
-                  <h4 className="font-extrabold text-sm text-slate-900">3. Coverage Directory &amp; LGU Staff Banner</h4>
-                  <p className="text-xs text-slate-500">Configure barangay coverage section headings, filter pills, and LGU field operations call-to-action.</p>
+                  <h4 className="font-extrabold text-sm text-slate-900">Barangay Sectors &amp; Public Coverage</h4>
+                  <p className="text-xs text-slate-500">Edit the public section headings, filter names, and barangay assignments.</p>
                 </div>
               </div>
 
@@ -1959,7 +1936,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
                     value={landingForm.coverageDesc}
                     onChange={(e) => setLandingForm({ ...landingForm, coverageDesc: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium text-slate-700"
-                    placeholder="Each barangay operates its own scoped Local Farm Technician (LFT) account for decentralized registration."
+                    placeholder={DEFAULT_LANDING_PAGE_CONFIG.coverageDesc}
                   />
                 </div>
                 {/* Filter Pills */}
@@ -1996,6 +1973,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
                   </div>
                 </div>
               </div>
+
+              <fieldset className="space-y-3 rounded-xl border border-blue-100 bg-slate-50 p-4" disabled={savingSettings}>
+                <legend className="px-1 text-sm font-semibold text-blue-950">Public Sector Assignments</legend>
+                <p className="text-xs text-slate-600">Select the public sector for each barangay. Save All Changes to publish the assignments.</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {OFFICIAL_15_BARANGAYS.map((name) => {
+                    const sector = sectorDraft[name] ?? getBarangayPublicSector(name, barangayProfiles);
+                    return (
+                      <fieldset key={name} className="flex flex-wrap gap-2 rounded-md border border-slate-200 bg-white px-3 pb-2 pt-1">
+                        <legend className="px-1 text-sm font-semibold text-slate-800">{getBarangayLabel(name, barangayProfiles)}</legend>
+                        {(['coastal', 'inland'] as const).map((option) => (
+                          <label key={option} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-slate-700 has-checked:bg-blue-50 has-checked:text-blue-900">
+                            <input type="radio" name={`public-sector-${name}`} checked={sector === option} className="accent-blue-700"
+                              onChange={() => setSectorDraft((draft) => ({ ...draft, [name]: option }))} />
+                            {getPublicSectorLabel(option, landingForm)}
+                          </label>
+                        ))}
+                      </fieldset>
+                    );
+                  })}
+                </div>
+              </fieldset>
 
               {/* LGU Silago Field Operations CTA */}
               <div className="p-4 bg-slate-50/70 rounded-2xl border border-slate-200 space-y-4">

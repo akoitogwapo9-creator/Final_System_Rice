@@ -307,9 +307,6 @@ export interface LandingPageConfig {
   heroCardTextTheme?: 'light' | 'dark';
 
   // Announcement Banner
-  topNoticeTag: string;
-  topNoticeText: string;
-  topNoticeLinkText: string;
 
   // Live Stats Labels & Season
   statLabelParcels: string;

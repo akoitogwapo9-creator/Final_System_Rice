@@ -752,10 +752,11 @@ export const AccountsView: React.FC = () => {
             </div>
 
             <form onSubmit={handleSave} className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              <fieldset className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <legend className="mb-3 font-semibold text-blue-950">Account Information &amp; Login Credentials</legend>
                 <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Full Name *</label>
-                  <input
+                  <label htmlFor="lft-account-name" className="font-bold text-slate-700">Full Name *</label>
+                  <input id="lft-account-name" autoComplete="name"
                     type="text"
                     required
                     value={formData.name}
@@ -764,28 +765,75 @@ export const AccountsView: React.FC = () => {
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs font-medium"
                   />
                 </div>
-
-
-                {editingAccount && <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Account Status *</label>
-                  <select
-                    value={formData.status}
+                <div className="space-y-1">
+                  <label htmlFor="lft-account-contact" className="font-bold text-slate-700">Contact Number</label>
+                  <input id="lft-account-contact" autoComplete="tel"
+                    type="tel"
+                    value={formData.contactNumber}
+                    onChange={(e) => setFormData({ ...formData, contactNumber: e.target.value })}
+                    placeholder="0917-000-0000"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs font-mono"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="lft-account-username" className="font-bold text-slate-700">Login Username *</label>
+                  <input id="lft-account-username" autoComplete="username"
+                    type="text"
+                    required
+                    value={formData.username}
+                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                    placeholder="e.g. wella.bongon"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="lft-account-email" className="font-bold text-slate-700">Official Municipal Email</label>
+                  <input id="lft-account-email" autoComplete="email"
+                    type="email"
+                    required
+                    readOnly={Boolean(editingAccount?.authUserId)}
+                    title={editingAccount?.authUserId ? 'This email is linked to the officer’s Supabase sign-in.' : undefined}
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    placeholder="e.g. wella.bongon@silago-agriculture.gov.ph"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs"
+                  />
+                </div>
+                {!editingAccount && (
+                  <div className="space-y-1">
+                    <label htmlFor="lft-initial-password" className="font-bold text-slate-700">Initial Password *</label>
+                    <div className="relative">
+                      <input id="lft-initial-password" type={showInitialPassword ? 'text' : 'password'}
+                        value={initialPassword} onChange={(event) => setInitialPassword(event.target.value)}
+                        minLength={8} required autoComplete="new-password"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 pr-10 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-600" />
+                      <button type="button" onClick={() => setShowInitialPassword(!showInitialPassword)}
+                        aria-label={showInitialPassword ? 'Hide initial password' : 'Show initial password'} className="absolute right-2 top-2 text-slate-600">
+                        {showInitialPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="space-y-1">
+                  <label htmlFor="lft-account-status" className="font-bold text-slate-700">Account Status *</label>
+                  <select id="lft-account-status" required
+                    value={isAccountActive(formData.status) ? 'Active / Certified' : formData.status}
                     onChange={(e) => setFormData({ ...formData, status: e.target.value })}
                     className="w-full px-2.5 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs bg-white font-medium"
                   >
-                    <option value="Certified Field LFT (Active)">Active / Certified</option>
+                    <option value="Active / Certified">Active / Certified</option>
                     <option value="Pending Activation">Pending Activation</option>
                     <option value="Disabled / Inactive">Disabled / Inactive</option>
                   </select>
-                </div>}
-              </div>
+                </div>
+              </fieldset>
 
               {saveError && <p role="alert" className="text-xs text-red-700">{saveError}</p>}
 
               {/* Profile Picture URL Field */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <label className="font-bold text-slate-700 flex items-center gap-1.5 text-xs">
+                  <label htmlFor="lft-account-photo" className="font-bold text-slate-700 flex items-center gap-1.5 text-xs">
                     <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
                     <span>Profile Photo (Cloud Storage / URL)</span>
                   </label>
@@ -811,7 +859,7 @@ export const AccountsView: React.FC = () => {
                       <Users className="w-5 h-5 text-slate-400" />
                     )}
                   </div>
-                  <input
+                  <input id="lft-account-photo" autoComplete="url"
                     type="url"
                     value={formData.photoUrl}
                     onChange={(e) => setFormData({ ...formData, photoUrl: e.target.value })}
@@ -873,61 +921,6 @@ export const AccountsView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Contact Number</label>
-                  <input
-                    type="text"
-                    value={formData.contactNumber}
-                    onChange={(e) => setFormData({ ...formData, contactNumber: e.target.value })}
-                    placeholder="e.g. 0917-829-4501"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs font-mono"
-                  />
-                </div>
-
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Login Username *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.username}
-                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                    placeholder="e.g. wella.bongon"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none font-mono text-xs"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Official Municipal Email</label>
-                  <input
-                    type="email"
-                    required
-                    readOnly={Boolean(editingAccount?.authUserId)}
-                    title={editingAccount?.authUserId ? 'This email is linked to the officer’s Supabase sign-in.' : undefined}
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="e.g. wella.bongon@silago-agriculture.gov.ph"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs"
-                  />
-                </div>
-                {!editingAccount && (
-                  <div className="space-y-1">
-                    <label htmlFor="lft-initial-password" className="font-bold text-slate-700">Initial Password</label>
-                    <div className="relative">
-                      <input id="lft-initial-password" type={showInitialPassword ? 'text' : 'password'}
-                        value={initialPassword} onChange={(event) => setInitialPassword(event.target.value)}
-                        minLength={8} required autoComplete="new-password"
-                        className="w-full rounded-md border border-slate-300 px-3 py-2 pr-10 text-sm" />
-                      <button type="button" onClick={() => setShowInitialPassword(!showInitialPassword)}
-                        aria-label={showInitialPassword ? 'Hide initial password' : 'Show initial password'} className="absolute right-2 top-2 text-slate-600">
-                        {showInitialPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 shrink-0">
                 <button
                   type="button"
@@ -946,7 +939,7 @@ export const AccountsView: React.FC = () => {
                   }`}
                 >
                   <Lock className="w-3.5 h-3.5" />
-                  <span>{isSaving ? 'Saving…' : editingAccount ? 'Save Changes' : 'Create LFT Account'}</span>
+                  <span>{isSaving ? 'Saving…' : editingAccount ? 'Save Changes' : 'Create Account'}</span>
                 </button>
               </div>
             </form>

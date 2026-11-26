@@ -54,10 +54,38 @@ export type BarangayClassification = string;
 export function getBarangayClassifications(profiles: BarangayProfiles): string[] {
   return [...new Set([...BARANGAY_CLASSIFICATIONS, ...OFFICIAL_15_BARANGAYS.map((name) => getBarangayZone(name, profiles))])];
 }
+export const PUBLIC_SECTOR_NAMES = { coastal: 'Coastal Sectors', inland: 'Inland & Irrigated' } as const;
+export type PublicBarangaySector = keyof typeof PUBLIC_SECTOR_NAMES;
+export const BARANGAY_TERRAINS = [
+  'Coastal Plains', 'River Basin Irrigated', 'Upland & River Basin', 'Lowland Alluvial',
+  'Upland Terrace', 'Lowland Alluvial & Coast', 'Lowland Alluvial & Coastal'
+] as const;
+export const DEFAULT_COVERAGE_DESCRIPTION = 'Explore Silago’s barangays and their agricultural landscapes through the Municipal Agriculture Office.';
+const LEGACY_COVERAGE_DESCRIPTION = 'Each barangay operates its own scoped Local Farm Technician (LFT) account for decentralized registration.';
+
+export function getCoverageDescription(description?: string): string {
+  const text = description?.trim();
+  return !text || text === LEGACY_COVERAGE_DESCRIPTION ? DEFAULT_COVERAGE_DESCRIPTION : text;
+}
+
+export function getPublicSectorLabel(sector: PublicBarangaySector, labels?: { filterCoastalLabel?: string; filterInlandLabel?: string }): string {
+  return (sector === 'coastal' ? labels?.filterCoastalLabel : labels?.filterInlandLabel)?.trim() || PUBLIC_SECTOR_NAMES[sector];
+}
+
+export function getBarangayPublicSector(name: string, profiles: BarangayProfiles): PublicBarangaySector {
+  const saved = profiles[getDisplayBarangay(name)]?.publicSector;
+  return saved === 'coastal' || saved === 'inland' ? saved : getBarangayZone(name, profiles) === 'Coastal' ? 'coastal' : 'inland';
+}
+
+export function defaultBarangayPublicSector(name: string): PublicBarangaySector {
+  return COASTAL_BARANGAYS.some((barangay) => barangay === name) ? 'coastal' : 'inland';
+}
+
 export type BarangayProfiles = Record<string, {
   displayName: string;
   classification: BarangayClassification;
   details?: Partial<Pick<Barangay, 'totalAreaHa' | 'irrigatedAreaHa' | 'rainfedAreaHa' | 'lat' | 'lng' | 'focalPerson' | 'contactNumber' | 'terrain' | 'puroks'>>;
+  publicSector?: PublicBarangaySector;
   boundary?: [number, number][] | null;
 }>;
 

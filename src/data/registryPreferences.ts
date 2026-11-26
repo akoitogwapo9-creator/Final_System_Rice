@@ -19,7 +19,6 @@ export interface RegistryPreferences {
   activeSeason: string;
   agriculturistName: string;
   agriculturistTitle: string;
-  showAnnouncement: boolean;
   showBarangayDirectory: boolean;
   showLegalRepository: boolean;
   dateFormat: 'MDY' | 'DMY' | 'ISO';
@@ -36,7 +35,6 @@ export const DEFAULT_REGISTRY_PREFERENCES: RegistryPreferences = {
   activeSeason: ACTIVE_SEASON,
   agriculturistName: '',
   agriculturistTitle: 'Municipal Agriculturist',
-  showAnnouncement: true,
   showBarangayDirectory: true,
   showLegalRepository: true,
   dateFormat: 'MDY',

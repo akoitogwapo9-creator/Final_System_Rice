@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { BARANGAYS, getBarangayLabel, getBarangayZone } from '../data/barangays';
+import { BARANGAYS, getBarangayLabel, getBarangayPublicSector, getCoverageDescription, getPublicSectorLabel, PublicBarangaySector } from '../data/barangays';
 import { DECREE_CATEGORIES, LegalDecree } from '../data/legalDecrees';
 import { Barangay, PortalTab } from '../types';
 import { SilagoSeal, BagOngSilagoLogo, OfficialSealsTrio } from './Seals';
@@ -157,22 +157,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         contactNumber: s.contactNumber || b.contactNumber,
         lat: Number(s.centerLat ?? b.lat),
         lng: Number(s.centerLng ?? b.lng),
+        ...barangayProfiles[b.name]?.details,
       };
     });
-  }, [savedSettings]);
+  }, [savedSettings, barangayProfiles]);
 
-  // Barangay filter: ALL, COASTAL, INLAND
-  const [barangayFilter, setBarangayFilter] = useState<'ALL' | 'COASTAL' | 'INLAND'>('ALL');
-
-  const filteredBarangays = useMemo(() => {
-    if (barangayFilter === 'COASTAL') {
-      return liveBarangays.filter((b) => getBarangayZone(b.name, barangayProfiles) === 'Coastal');
-    }
-    if (barangayFilter === 'INLAND') {
-      return liveBarangays.filter((b) => getBarangayZone(b.name, barangayProfiles) !== 'Coastal');
-    }
-    return liveBarangays;
-  }, [barangayFilter, liveBarangays, barangayProfiles]);
+  const [barangayFilter, setBarangayFilter] = useState<'all' | PublicBarangaySector>('all');
+  const filteredBarangays = barangayFilter === 'all' ? liveBarangays
+    : liveBarangays.filter((barangay) => getBarangayPublicSector(barangay.name, barangayProfiles) === barangayFilter);
 
   // Scroll to section helper
   const scrollToSection = (id: string) => {
@@ -203,30 +195,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   return (
     <div className="min-h-screen bg-gov-canvas text-gov-ink font-sans flex flex-col selection:bg-gov-forest selection:text-white">
-      {/* Top Official Notice Bar */}
-      {registryPreferences.showAnnouncement && (
-      <div className="bg-gov-forest-dark text-white/90 px-4 py-2 text-xs font-medium flex items-center justify-between gap-3 border-b border-white/10">
-        <div className="max-w-[1500px] mx-auto w-full flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="flex h-2 w-2 rounded-full bg-gov-gold shrink-0" />
-            <span className="font-bold text-white uppercase tracking-wider text-[10px] bg-white/10 px-2 py-0.5 rounded-sm border border-white/15 shrink-0">
-              {landingPageConfig?.topNoticeTag || 'Official Notice'}
-            </span>
-            <span className="truncate text-white/85">
-              {landingPageConfig?.topNoticeText || '2026 Wet Season RSBSA Georeferencing & Palay Monitoring active across all 15 Silago Barangays.'}
-            </span>
-          </div>
-          {registryPreferences.showBarangayDirectory && (<button
-            type="button"
-            onClick={() => scrollToSection('barangays-section')}
-            className="text-amber-200 hover:text-white font-semibold text-[11px] underline uppercase tracking-wider shrink-0 cursor-pointer hidden sm:inline"
-          >
-            {landingPageConfig?.topNoticeLinkText || 'Explore 15 Barangays →'}
-          </button>)}
-        </div>
-      </div>
-      )}
-
       {/* Official Municipal Header Bar */}
       <header className="bg-white border-b border-gov-line sticky top-0 z-40">
         <div className="max-w-[1500px] mx-auto px-4 sm:px-8 py-3 flex items-center justify-between gap-4">
@@ -687,50 +655,25 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               {landingPageConfig?.coverageTitle || 'All 15 Barangays of Silago'}
             </h2>
             <p className="text-xs text-gov-muted mt-1">
-              {landingPageConfig?.coverageDesc || 'Each barangay operates its own scoped Local Farm Technician (LFT) account for decentralized registration.'}
+              {getCoverageDescription(landingPageConfig?.coverageDesc)}
             </p>
           </div>
 
-          {/* Filter Segment */}
-          <div className="flex items-center gap-1 bg-white border border-gov-line p-1 rounded">
-            <button
-              type="button"
-              onClick={() => setBarangayFilter('ALL')}
-              className={`px-3 py-1.5 rounded-sm text-xs font-semibold transition cursor-pointer ${
-                barangayFilter === 'ALL'
-                  ? 'bg-gov-forest text-white'
-                  : 'text-gov-muted hover:text-gov-ink bg-transparent'
-              }`}
-            >
-              {landingPageConfig?.filterAllLabel || 'All (15)'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setBarangayFilter('COASTAL')}
-              className={`px-3 py-1.5 rounded-sm text-xs font-semibold transition cursor-pointer ${
-                barangayFilter === 'COASTAL'
-                  ? 'bg-gov-forest text-white'
-                  : 'text-gov-muted hover:text-gov-ink bg-transparent'
-              }`}
-            >
-              {landingPageConfig?.filterCoastalLabel || 'Coastal Sectors'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setBarangayFilter('INLAND')}
-              className={`px-3 py-1.5 rounded-sm text-xs font-semibold transition cursor-pointer ${
-                barangayFilter === 'INLAND'
-                  ? 'bg-gov-forest text-white'
-                  : 'text-gov-muted hover:text-gov-ink bg-transparent'
-              }`}
-            >
-              {landingPageConfig?.filterInlandLabel || 'Inland & Irrigated'}
-            </button>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Filter barangays by public sector">
+            {(['all', 'coastal', 'inland'] as const).map((sector) => (
+              <button type="button" key={sector} aria-pressed={barangayFilter === sector} onClick={() => setBarangayFilter(sector)}
+                className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${barangayFilter === sector
+                  ? 'border-gov-forest bg-gov-forest text-white'
+                  : 'border-slate-300 bg-white text-slate-800 hover:border-gov-green hover:bg-emerald-50'}`}>
+                {sector === 'all' ? landingPageConfig?.filterAllLabel?.trim() || `All (${liveBarangays.length})` : getPublicSectorLabel(sector, landingPageConfig)}
+              </button>
+            ))}
           </div>
         </div>
 
         {/* 15 Barangay Cards Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          {!filteredBarangays.length && <p className="text-sm text-slate-600 sm:col-span-2">No barangays are assigned to this sector.</p>}
           {filteredBarangays.map((b) => {
             const ecoStyle = getEcosystemBadgeStyle(b.terrain);
             return (
@@ -749,9 +692,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 </span>
 
                 {/* Bottom: Puroks & Dynamic Ecosystem Pill Badge */}
-                <span className="flex items-center justify-between text-xs pt-2 border-t border-gov-line/60">
+                <span className="flex flex-wrap items-center justify-between gap-2 text-xs pt-2 border-t border-gov-line/60">
                   <span className="text-gov-muted font-medium">
-                    {b.puroks ?? (b as any).purokCount ?? 7} Puroks
+                    {b.puroks} {b.puroks === 1 ? 'Purok' : 'Puroks'}
                   </span>
                   <span className={`px-2 py-0.5 rounded-sm text-[11px] font-semibold flex items-center gap-1 ${ecoStyle.badgeClass}`}>
                     <span className="text-xs leading-none">{ecoStyle.icon}</span>

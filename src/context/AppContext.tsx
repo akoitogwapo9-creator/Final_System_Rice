@@ -1,7 +1,7 @@
 import { RegistryPreferences, REGISTRY_PREFERENCES_KEY, normalizeRegistryPreferences, readRegistryPreferences } from '../data/registryPreferences';
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { User, FarmParcel, Language, BackgroundPreset, LftAccount, SeasonalProductionRecord, OfficeContactInfo, PortalTab, MunicipalBrandingSettings, LandingPageConfig, MandateCardItem, GovernmentSubsidyProgram, SubsidyCategory, SubsidyClaimRecord, SubsidyHistoryEntry, isAccountActive } from '../types';
-import { BARANGAYS, BARANGAY_CLASSIFICATIONS, BarangayProfiles, getAssignedLftForBarangay, isUserAuthorizedForBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
+import { BARANGAYS, BARANGAY_CLASSIFICATIONS, BarangayProfiles, DEFAULT_COVERAGE_DESCRIPTION, getBarangayLabel, getBarangayZone, PublicBarangaySector, getAssignedLftForBarangay, isUserAuthorizedForBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
 import { DEFAULT_BG_PHOTO, DEFAULT_SLSU_PHOTO, SLSU_DEFAULTS, PRESET_BACKGROUNDS } from '../data/photos';
 import { DEFAULT_SUBSIDY_PROGRAMS } from '../data/subsidies';
 import { RiceVariety, RICE_VARIETIES, mergeRequiredRiceVarieties } from '../data/riceVarieties';
@@ -92,9 +92,6 @@ export const DEFAULT_LANDING_PAGE_CONFIG: LandingPageConfig = {
   heroCardTextTheme: 'light',
 
   // Announcement Banner
-  topNoticeTag: 'Official Notice',
-  topNoticeText: '2026 Wet Season RSBSA Georeferencing & Palay Monitoring active across all 15 Silago Barangays.',
-  topNoticeLinkText: 'Explore 15 Barangays →',
 
   // Live Stats Labels & Season
   statLabelParcels: 'TOTAL REGISTERED PARCELS',
@@ -122,7 +119,7 @@ export const DEFAULT_LANDING_PAGE_CONFIG: LandingPageConfig = {
   // Coverage Section
   coverageTag: 'FULL MUNICIPALITY COVERAGE',
   coverageTitle: 'All 15 Barangays of Silago',
-  coverageDesc: 'Each barangay operates its own scoped Local Farm Technician (LFT) account for decentralized registration.',
+  coverageDesc: DEFAULT_COVERAGE_DESCRIPTION,
   filterAllLabel: 'All (15)',
   filterCoastalLabel: 'Coastal Sectors',
   filterInlandLabel: 'Inland & Irrigated',
@@ -441,6 +438,7 @@ interface AppContextType {
   mapFarmerToParcel: (row: any) => FarmParcel;
 
   barangayProfiles: BarangayProfiles;
+  updatePublicBarangaySectors: (sectors: Record<string, PublicBarangaySector>) => Promise<boolean>;
   updateBarangayProfile: (name: string, profile: BarangayProfiles[string]) => Promise<boolean>;
 
   // User Session & Auth Loading State
@@ -618,7 +616,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     const typedZone = profile.classification.trim();
     const classification = BARANGAY_CLASSIFICATIONS.find((zone) => zone.toLowerCase() === typedZone.toLowerCase()) || typedZone;
     if (!displayName || !classification || classification.length > 60) return false;
-    pendingBarangayProfiles.current[name] = { ...barangayProfiles[name], ...profile, displayName, classification };
+    pendingBarangayProfiles.current[name] = { ...barangayProfiles[name], ...pendingBarangayProfiles.current[name], ...profile, displayName, classification };
+    try { localStorage.setItem(PENDING_BARANGAY_PROFILES_KEY, JSON.stringify(pendingBarangayProfiles.current)); } catch {}
+    applyBarangayProfiles(barangayProfiles);
+    return flushBarangayProfiles();
+  };
+
+  const updatePublicBarangaySectors = async (sectors: Record<string, PublicBarangaySector>) => {
+    if (currentUser?.role !== 'Central Admin') return false;
+    for (const name of OFFICIAL_15_BARANGAYS) {
+      const publicSector = sectors[name];
+      if (publicSector !== 'coastal' && publicSector !== 'inland') continue;
+      pendingBarangayProfiles.current[name] = {
+        displayName: getBarangayLabel(name, barangayProfiles),
+        classification: getBarangayZone(name, barangayProfiles),
+        ...barangayProfiles[name],
+        ...pendingBarangayProfiles.current[name],
+        publicSector
+      };
+    }
     try { localStorage.setItem(PENDING_BARANGAY_PROFILES_KEY, JSON.stringify(pendingBarangayProfiles.current)); } catch {}
     applyBarangayProfiles(barangayProfiles);
     return flushBarangayProfiles();
@@ -2746,6 +2762,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         currentUser,
         barangayProfiles,
         updateBarangayProfile,
+        updatePublicBarangaySectors,
         setCurrentUser,
         updateCurrentUserProfile,
         updateCurrentUserPassword,
