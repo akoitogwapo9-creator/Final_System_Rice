@@ -22,6 +22,24 @@ export const OFFICIAL_15_BARANGAYS = [
 
 export type OfficialBarangay = typeof OFFICIAL_15_BARANGAYS[number];
 
+export const BARANGAY_PARCEL_CODES: Record<OfficialBarangay, string> = {
+  Balagawan: 'BLG',
+  Catmon: 'CTM',
+  Calubian: 'CLB',
+  Hingatungan: 'HNG',
+  Imelda: 'IML',
+  Katipunan: 'KTP',
+  Laguna: 'LGN',
+  Mercedes: 'MRC',
+  'Poblacion District 1': 'POB1',
+  'Poblacion District 2': 'POB2',
+  Puntana: 'PNT',
+  Salvacion: 'SLV',
+  'San Isidro': 'SIS',
+  'San Roque': 'SRQ',
+  'Sap-ang': 'SAP'
+};
+
 // Official Classification: 9 Coastal, 6 Upland
 export const COASTAL_BARANGAYS: OfficialBarangay[] = [
   'Balagawan',

@@ -27,6 +27,7 @@ export interface SeasonalProductionRecord {
   estimatedHarvestDate: string; // YYYY-MM-DD (calculated based on variety maturity)
   actualHarvestDate?: string; // YYYY-MM-DD
   harvestDate?: string; // alias for actualHarvestDate / harvest date
+  harvestedAreaHa?: number;
   actualProductionVolumeMt: number; // in Metric Tons (MT)
   actualProductionBags?: number; // in 50-kg cavans/bags (= MT * 20)
   yieldBags?: number; // alias for actualProductionBags (ihap sa sako/kaban)
@@ -81,6 +82,7 @@ export interface FarmParcel {
   irrigationAssociation?: string; // e.g. Balagawan Communal Irrigators Association (BCIA)
   farmerFamilyName?: string; // e.g. ALAS
   farmerGivenName?: string; // e.g. MARIO
+  farmerSuffix?: string;
   farmerMiddleName?: string; // e.g. CABUG-OS
   birthday?: string; // e.g. 1949-05-16
   farmLocation?: string; // e.g. BALAGAWAN or HINUNDAYAN
@@ -282,7 +284,6 @@ export interface LandingPageConfig {
   heroReturnBtnText: string;
   heroReturnLftBtnText: string;
   heroSignInBtnText: string;
-  heroGisBtnText: string;
 
   // Hero Section Background Customization
   heroBgColor?: string;

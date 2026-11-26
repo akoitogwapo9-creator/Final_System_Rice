@@ -19,7 +19,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { ASSIGNED_10_BARANGAYS } from '../data/barangays';
-import { CROPPING_SEASONS } from '../data/seasonalProduction';
+import { ACTIVE_SEASON, getSeasonOptions } from '../data/seasonalProduction';
 
 interface DocumentParametersModalProps {
   isOpen: boolean;
@@ -80,7 +80,7 @@ export const DocumentParametersModal: React.FC<DocumentParametersModalProps> = (
   onUpdateReportDate,
   selectedBarangay = 'All Barangays',
   onChangeSelectedBarangay,
-  selectedSeason = 'Wet Season (WS) 2026',
+  selectedSeason = ACTIVE_SEASON,
   onChangeSelectedSeason,
   paperSize = 'A4',
   onChangePaperSize,
@@ -499,7 +499,7 @@ export const DocumentParametersModal: React.FC<DocumentParametersModalProps> = (
                     onChange={(e) => onChangeSelectedSeason(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 cursor-pointer"
                   >
-                    {CROPPING_SEASONS.map((season) => (
+                    {getSeasonOptions([selectedSeason]).map((season) => (
                       <option key={season} value={season}>
                         {season}
                       </option>

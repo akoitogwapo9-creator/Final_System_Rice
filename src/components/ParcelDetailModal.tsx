@@ -40,7 +40,7 @@ interface ParcelDetailModalProps {
 }
 
 export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
-  parcel,
+  parcel: initialParcel,
   initialTab = 'profile',
   onClose,
   onEdit,
@@ -50,7 +50,8 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [seasonalModalOpen, setSeasonalModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<SeasonalProductionRecord | null>(null);
-  const { permissions } = useApp();
+  const { parcels, permissions } = useApp();
+  const parcel = parcels.find((item) => item.tagNumber === initialParcel?.tagNumber) || initialParcel;
   const formSchema = useRegistryFormSchema();
 
   if (!parcel) return null;
@@ -73,7 +74,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
   const seasonalRecords = Array.isArray(parcel?.seasonalRecords) ? parcel.seasonalRecords : [];
   const farmerDisplayName =
     (parcel as any)?.farmerFamilyName && (parcel as any)?.farmerGivenName
-      ? `${(parcel as any).farmerFamilyName}, ${(parcel as any).farmerGivenName} ${(parcel as any).farmerMiddleName || ''}`.trim()
+      ? `${(parcel as any).farmerFamilyName}, ${(parcel as any).farmerGivenName} ${parcel.farmerMiddleName || ''} ${parcel.farmerSuffix || ''}`.replace(/\s+/g, ' ').trim()
       : parcel?.raiserName || 'N/A';
   const barangayName = parcel?.barangay || 'Unspecified';
   const areaHa = parcel?.weightKg ?? (parcel as any)?.farmAreaHa ?? (parcel as any)?.areaHa ?? 0;
@@ -87,7 +88,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
 
   // Summary harvest stats calculations across all cropping seasons
   const totalHarvestMt = useMemo(() => {
-    return seasonalRecords.reduce((sum, r) => sum + (r.actualProductionVolumeMt || r.yieldMetricTons || 0), 0);
+    return seasonalRecords.reduce((sum, r) => sum + (r.actualProductionVolumeMt ?? 0), 0);
   }, [seasonalRecords]);
 
   const totalHarvestBags = useMemo(() => {
@@ -98,10 +99,10 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
   }, [seasonalRecords]);
 
   const avgYieldMt = useMemo(() => {
-    if (seasonalRecords.length === 0) return parcel.targetYieldMt || 0;
+    if (seasonalRecords.length === 0) return 0;
     const totalYield = seasonalRecords.reduce((sum, r) => sum + (r.yieldMtPerHa || r.yieldMetricTons || 0), 0);
     return Number((totalYield / seasonalRecords.length).toFixed(2));
-  }, [seasonalRecords, parcel.targetYieldMt]);
+  }, [seasonalRecords]);
 
   const totalGrossIncome = useMemo(() => {
     return seasonalRecords.reduce((sum, r) => {
@@ -432,7 +433,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
                       {seasonalRecords.map((rec) => {
                         const seasonLabel = rec.seasonName || (rec.season ? rec.season.split('(')[0].trim() : 'Cropping Season');
                         const bags = rec.yieldBags ?? rec.actualProductionBags ?? Math.round((rec.actualProductionVolumeMt || 0) * 20);
-                        const volumeMt = rec.actualProductionVolumeMt || (rec.yieldMetricTons ? rec.yieldMetricTons * (areaHa || 1) : 0);
+                        const volumeMt = rec.actualProductionVolumeMt ?? 0;
                         const yieldMt = rec.yieldMtPerHa ?? rec.yieldMetricTons ?? (areaHa ? volumeMt / areaHa : 0);
                         const income = rec.grossIncome ?? (bags * 1150);
                         const dateLabel = rec.harvestDate || rec.actualHarvestDate || rec.estimatedHarvestDate || '-';

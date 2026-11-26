@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { FarmParcel } from '../types';
+import { ACTIVE_SEASON, getParcelSeasonOptions, getSeasonRecord, matchesSeasonFilter, normalizeSeasonalRecord, seasonOrder } from '../data/seasonalProduction';
+import { FarmParcel, SeasonalProductionRecord } from '../types';
 import { useApp } from '../context/AppContext';
 import { isUserAuthorizedForBarangay } from '../data/barangays';
-import { calculateCropGrowthStage, CropGrowthStageCalc } from '../data/riceVarieties';
+import { calculateCropGrowthStage, CropGrowthStageCalc, SEED_TYPE_LABELS } from '../data/riceVarieties';
 import { withTimeout } from '../utils/supabaseClient';
 import { ManageReferenceModal, ManageType } from './ManageReferenceModal';
 import {
@@ -82,35 +83,33 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
     irrigationAssociation:
       irrigationAssociations[0] || 'Balagawan Communal Irrigators Association (BCIA)',
     sex: tenures[0] || 'Owner-Cultivator',
-    croppingSeason: seasons[0] || 'Wet Season (WS) 2026 (June – Nov 2026)',
-    plantingDate: new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    croppingSeason: ACTIVE_SEASON,
+    plantingDate: '',
     targetYieldMt: 6.0
   });
 
   const populateFromParcel = (parcel: FarmParcel) => {
-    const hasVariety =
-      parcel.breed &&
-      parcel.breed.toLowerCase() !== 'not yet assigned' &&
-      varieties.some((v) => v.name.toLowerCase() === parcel.breed.toLowerCase());
-    const defaultVariety = varieties[0]?.name || 'NSIC Rc 222';
-    const resolvedBreed = hasVariety ? parcel.breed : parcel.variety || defaultVariety;
+    const parcelSeason = parcel.croppingSeason || parcel.season || ACTIVE_SEASON;
+    const season = getParcelSeasonOptions([parcel], seasons).find((item) =>
+      matchesSeasonFilter(parcelSeason, item)) || ACTIVE_SEASON;
+    const record = getSeasonRecord(parcel, season);
+    const defaultVariety = varieties[0]?.name || '222';
+    const resolvedBreed = record?.seedVariety ||
+      (parcel.breed && parcel.breed !== 'Not yet assigned' ? parcel.breed : defaultVariety);
     const matchedVar = varieties.find((v) => v.name.toLowerCase() === resolvedBreed.toLowerCase());
 
     setCropData({
-      breed: resolvedBreed,
-      seedType: parcel.seedType || matchedVar?.seedType || 'INBRED',
+      breed: matchedVar?.name || resolvedBreed,
+      seedType: matchedVar?.seedType || record?.seedType || parcel.seedType || 'UNKNOWN',
       purpose: parcel.purpose || ecosystems[0] || 'Irrigated Lowland (NIA)',
       irrigationAssociation:
         parcel.irrigationAssociation ||
         irrigationAssociations[0] ||
         'Balagawan Communal Irrigators Association (BCIA)',
       sex: parcel.sex || tenures[0] || 'Owner-Cultivator',
-      croppingSeason:
-        parcel.croppingSeason || parcel.season || seasons[0] || 'Wet Season (WS) 2026 (June – Nov 2026)',
-      plantingDate:
-        parcel.plantingDate ||
-        new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      targetYieldMt: Number(parcel.targetYieldMt) || matchedVar?.aveYieldMt || 6.0
+      croppingSeason: season,
+      plantingDate: record?.plantingDate || parcel.plantingDate || '',
+      targetYieldMt: Number(parcel.targetYieldMt) || matchedVar?.aveYieldMt || 0
     });
     setCustomValues(parcel.customFields || getParcelCustomFields(parcel.tagNumber));
   };
@@ -162,6 +161,20 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
     }));
   };
 
+  const handleSeasonChange = (season: string) => {
+    const record = selectedParcel && getSeasonRecord(selectedParcel, season);
+    const defaultVariety = varieties[0];
+    const variety = varieties.find((item) => item.name.toLowerCase() === record?.seedVariety.toLowerCase());
+    setCropData((previous) => ({
+      ...previous,
+      croppingSeason: season,
+      breed: variety?.name || record?.seedVariety || defaultVariety?.name || '222',
+      seedType: variety?.seedType || record?.seedType || defaultVariety?.seedType || 'INBRED',
+      plantingDate: record?.plantingDate || '',
+      targetYieldMt: variety?.aveYieldMt || defaultVariety?.aveYieldMt || 0
+    }));
+  };
+
   const phenology: CropGrowthStageCalc = useMemo(() => {
     return calculateCropGrowthStage(cropData.plantingDate || '', cropData.breed || 'NSIC Rc 222');
   }, [cropData.plantingDate, cropData.breed]);
@@ -202,23 +215,47 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
     });
     saveParcelCustomFields(selectedParcel.tagNumber, mergedCustomValues);
 
-    const updatedParcel: FarmParcel = {
-      ...selectedParcel,
-      breed: cropData.breed,
-      variety: cropData.breed,
-      seedType: cropData.seedType,
+    const existingRecord = getSeasonRecord(selectedParcel, cropData.croppingSeason);
+    const seasonRecord = normalizeSeasonalRecord({
+      ...existingRecord,
+      season: cropData.croppingSeason,
+      seedVariety: cropData.breed,
+      seedType: cropData.seedType as SeasonalProductionRecord['seedType'],
+      plantingDate: cropData.plantingDate,
+      estimatedHarvestDate: phenology.estimatedHarvestDate,
+      productionStatus: existingRecord?.productionStatus || 'Standing Crop',
+      growthStage: phenology.stage,
+      elapsedDas: phenology.dap,
+      maturityPercentage: phenology.percentageMaturity,
+      lftOfficerName: existingRecord?.lftOfficerName || currentUser?.name || selectedParcel.focalPerson
+    }, selectedParcel.tagNumber);
+    const seasonalRecords = [
+      seasonRecord,
+      ...(selectedParcel.seasonalRecords || []).filter((record) =>
+        !matchesSeasonFilter(record.season, seasonRecord.season))
+    ].sort((a, b) => seasonOrder(b.season) - seasonOrder(a.season));
+    const currentParcelSeason = selectedParcel.croppingSeason || selectedParcel.season || '';
+    const updatesLatestCrop = seasonOrder(seasonRecord.season) >= seasonOrder(currentParcelSeason) ||
+      !selectedParcel.plantingDate;
+    const updatedParcel: Partial<FarmParcel> = {
+      seasonalRecords,
+      ...updatesLatestCrop && {
+        breed: cropData.breed,
+        variety: cropData.breed,
+        seedType: cropData.seedType,
+        croppingSeason: seasonRecord.season,
+        season: seasonRecord.season,
+        plantingDate: cropData.plantingDate,
+        targetYieldMt: Number(cropData.targetYieldMt),
+        harvestDate: seasonRecord.actualHarvestDate || phenology.estimatedHarvestDate,
+        healthStatus: seasonRecord.productionStatus === 'Harvest Completed' ? 'Harvested' : phenology.stage,
+        standingCropStage: phenology.stage,
+        ageMonths: phenology.dap
+      },
       purpose: cropData.purpose,
       ecosystem: cropData.purpose,
       irrigationAssociation: cropData.irrigationAssociation,
       sex: cropData.sex,
-      croppingSeason: cropData.croppingSeason,
-      season: cropData.croppingSeason,
-      plantingDate: cropData.plantingDate,
-      targetYieldMt: Number(cropData.targetYieldMt) || 6.0,
-      harvestDate: phenology.estimatedHarvestDate,
-      healthStatus: phenology.stage,
-      standingCropStage: phenology.stage,
-      ageMonths: phenology.dap,
       customFields: mergedCustomValues
     };
 
@@ -363,6 +400,33 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
 
               {/* Section 3: Variety, Irrigation & Tenurial Details */}
               <OfficeSectionCard title={sec3Label}>
+                <div className="max-w-lg">
+                  {formSchema.isVisible('crop-season') && (
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className={OFFICE_LABEL_CLASS}>
+                          {formSchema.getLabel('crop-season', 'Cropping Season')}{' '}
+                          {formSchema.isRequired('crop-season') && (
+                            <span className="text-red-600">*</span>
+                          )}
+                        </label>
+                        <OfficeFieldManageButton onClick={() => setManageType('season')} />
+                      </div>
+                      <select
+                        required={formSchema.isRequired('crop-season')}
+                        value={cropData.croppingSeason}
+                        onChange={(e) => handleSeasonChange(e.target.value)}
+                        className={OFFICE_SELECT_CLASS}
+                      >
+                        {getParcelSeasonOptions(selectedParcel ? [selectedParcel] : [], seasons).map((seas) => (
+                          <option key={seas} value={seas}>
+                            {seas}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                   {formSchema.isVisible('crop-variety') && (
                     <div className="space-y-1 sm:col-span-2">
@@ -384,9 +448,10 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                         onChange={(e) => handleVarietyChange(e.target.value)}
                         className={OFFICE_SELECT_CLASS}
                       >
+                        {!varieties.some((variety) => variety.name === cropData.breed) && <option>{cropData.breed}</option>}
                         {varieties.map((v) => (
                           <option key={v.name} value={v.name}>
-                            {v.name} ({v.seedType} • {v.maturityDays} DAS)
+                            {v.name} ({SEED_TYPE_LABELS[v.seedType]})
                           </option>
                         ))}
                       </select>
@@ -404,11 +469,12 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                       <select
                         required={formSchema.isRequired('crop-seed-type')}
                         value={cropData.seedType}
+                        disabled={varieties.some((variety) => variety.name === cropData.breed)}
                         onChange={(e) => setCropData({ ...cropData, seedType: e.target.value })}
                         className={OFFICE_SELECT_CLASS}
                       >
-                        <option value="INBRED">INBRED (Certified Seeds)</option>
-                        <option value="HYBRID">HYBRID (Hybrid Seeds)</option>
+                        <option value="INBRED">Inbred (RCEF)</option>
+                        <option value="HYBRID">Hybrid</option>
                         <option value="UNKNOWN">UNKNOWN / Farmer Saved</option>
                       </select>
                     </div>
@@ -498,31 +564,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                     </div>
                   )}
 
-                  {formSchema.isVisible('crop-season') && (
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <label className={OFFICE_LABEL_CLASS}>
-                          {formSchema.getLabel('crop-season', 'Cropping Season')}{' '}
-                          {formSchema.isRequired('crop-season') && (
-                            <span className="text-red-600">*</span>
-                          )}
-                        </label>
-                        <OfficeFieldManageButton onClick={() => setManageType('season')} />
-                      </div>
-                      <select
-                        required={formSchema.isRequired('crop-season')}
-                        value={cropData.croppingSeason}
-                        onChange={(e) => setCropData({ ...cropData, croppingSeason: e.target.value })}
-                        className={OFFICE_SELECT_CLASS}
-                      >
-                        {seasons.map((seas) => (
-                          <option key={seas} value={seas}>
-                            {seas}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+
                 </div>
 
                 <OfficeCustomFieldsGrid
@@ -693,7 +735,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
             if (manageType === 'variety') handleVarietyChange(val);
             else if (manageType === 'ecosystem') setCropData((p) => ({ ...p, purpose: val }));
             else if (manageType === 'tenure') setCropData((p) => ({ ...p, sex: val }));
-            else if (manageType === 'season') setCropData((p) => ({ ...p, croppingSeason: val }));
+            else if (manageType === 'season') handleSeasonChange(val);
             else if (manageType === 'irrigationAssociation')
               setCropData((p) => ({ ...p, irrigationAssociation: val }));
           }}

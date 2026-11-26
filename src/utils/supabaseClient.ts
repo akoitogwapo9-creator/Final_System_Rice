@@ -1,7 +1,7 @@
 import { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { supabase as sharedSupabaseClient, memoryAuthStorage } from '../supabase';
 import { FarmParcel, LftAccount, User } from '../types';
-import { generateInitialSeasonalRecords, normalizeSeasonalRecord } from '../data/seasonalProduction';
+import { isLegacyProductionEstimate, normalizeSeasonalRecord, ACTIVE_SEASON } from '../data/seasonalProduction';
 
 export { memoryAuthStorage };
 
@@ -35,19 +35,22 @@ export async function withTimeout<T>(
 }
 
 /**
- * Parses a farmer name into family name, given name, and middle name
+ * Parses a farmer name into family name, given name, middle name, and optional suffix
  * Supports formats:
  * - "Alas, Mario Cabug-os" -> family: "Alas", given: "Mario", middle: "Cabug-os"
  * - "Mario Cabug-os Alas" -> family: "Alas", given: "Mario", middle: "Cabug-os"
  * - "Damiano Sr. Abad Ballindo" -> family: "Ballindo", given: "Damiano", middle: "Sr. Abad"
  * - "Damiano Ballindo Jr." -> family: "Ballindo Jr.", given: "Damiano", middle: ""
  */
-export function parseFarmerName(nameStr: string): { family: string; given: string; middle: string } {
+export function parseFarmerName(nameStr: string): { family: string; given: string; middle: string; suffix?: string } {
   const trimmed = (nameStr || '').trim();
   if (!trimmed) return { family: '', given: '', middle: '' };
 
   if (trimmed.includes(',')) {
-    const [last, rest] = trimmed.split(',');
+    const [last, rest, middlePart, suffix] = trimmed.split(',');
+    if (suffix !== undefined) {
+      return { family: last.trim(), given: rest.trim(), middle: middlePart.trim(), suffix: suffix.trim() };
+    }
     const restParts = (rest || '').trim().split(/\s+/).filter(Boolean);
     const given = restParts[0] || '';
     const middle = restParts.slice(1).join(' ');
@@ -101,9 +104,13 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
 
   const parsed = parseFarmerName(farmerName);
 
-  const farmerFamilyName = (row.farmer_family_name || row.farmerFamilyName || row.family_name || (row.farmer_name ? String(row.farmer_name).split(',')[0]?.trim() : '') || parsed.family || '').trim();
-  const farmerGivenName = (row.farmer_given_name || row.farmerGivenName || row.given_name || (row.farmer_name && String(row.farmer_name).includes(',') ? String(row.farmer_name).split(',')[1]?.trim() : '') || parsed.given || farmerName).trim();
+  const farmerFamilyName = (row.farmer_family_name || row.farmerFamilyName || row.family_name || parsed.family || '').trim();
+  const farmerGivenName = (row.farmer_given_name || row.farmerGivenName || row.given_name || parsed.given || '').trim();
   const farmerMiddleName = (row.farmer_middle_name || row.farmerMiddleName || row.middle_name || parsed.middle || '').trim();
+  const farmerSuffix = String(row.farmer_suffix ?? row.farmerSuffix ?? row.suffix ?? parsed.suffix ?? '').trim();
+  const displayName = parsed.suffix
+    ? `${farmerFamilyName}, ${[farmerGivenName, farmerMiddleName, farmerSuffix].filter(Boolean).join(' ')}`
+    : farmerName;
 
   const areaHa = Number(row.farm_area_ha ?? row.farmAreaHa ?? row.area_ha ?? row.areaHa ?? row.weight_kg ?? row.weightKg ?? 1.25);
   const barangay = (row.barangay || '').trim();
@@ -119,7 +126,7 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     'NO RSBSA'
   ).trim();
   const commodity = row.commodity || row.commodity_planted || row.commodityPlanted || 'Rice';
-  const season = row.season || row.croppingSeason || row.cropping_season || 'Wet Season (WS) 2026 (June – Nov 2026)';
+  const season = row.season || row.croppingSeason || row.cropping_season || ACTIVE_SEASON;
   const fieldPhotoUrl = row.field_photo_url || row.fieldPhotoUrl || '';
   const photoUrl = row.photo_url || row.photoUrl || row.farmer_photo_url || row.farmerPhotoUrl || '';
 
@@ -147,10 +154,11 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     tagNumber,
     swineNameOrId: rsbsaNo || 'NO RSBSA',
     rsbsa_no: rsbsaNo || 'NO RSBSA',
-    raiserName: farmerName || 'UNKNOWN FARMER',
+    raiserName: displayName || 'UNKNOWN FARMER',
     farmerFamilyName,
     farmerGivenName,
     farmerMiddleName,
+    farmerSuffix,
     barangay,
     purok: row.purok || 'Purok 1',
     address: residentialAddress,
@@ -202,10 +210,7 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
       : []
   };
 
-  if (!parcel.seasonalRecords || parcel.seasonalRecords.length === 0) {
-    parcel.seasonalRecords = generateInitialSeasonalRecords(parcel);
-  }
-
+  parcel.seasonalRecords = parcel.seasonalRecords?.filter((record) => !isLegacyProductionEstimate(parcel, record));
   return parcel;
 }
 
@@ -759,7 +764,9 @@ export async function checkDuplicateFarmerName(
         const match = data.find((r: any) => {
           if (excludeTagNumber && (r.id === excludeTagNumber || r.id === `FARMER-${excludeTagNumber}`)) return false;
           const rName = normalize(r.farmer_name || '');
-          return rName === cleanName;
+          const parsed = parseFarmerName(r.farmer_name || '');
+          const orderedName = normalize([parsed.given, parsed.middle, parsed.family].filter(Boolean).join(' '));
+          return rName === cleanName || orderedName === cleanName;
         });
 
         if (match) {
@@ -828,7 +835,8 @@ export async function syncOfflinePendingFarms(): Promise<{
             contact_number: farmerPayload.contact_number,
             lat: farmerPayload.lat,
             lng: farmerPayload.lng,
-            area_ha: farmerPayload.area_ha
+            area_ha: farmerPayload.area_ha,
+            seasonal_records: farmerPayload.seasonal_records
           };
           const { error: coreErr } = await supabaseClient
             .from('farmers')
@@ -869,6 +877,18 @@ export async function syncOfflinePendingFarms(): Promise<{
   return { syncedCount, conflictCount, conflicts };
 }
 
+function formatFarmerNameForStorage(parcel: FarmParcel): string {
+  const fam = (parcel.farmerFamilyName || '').trim().toUpperCase();
+  const giv = (parcel.farmerGivenName || '').trim();
+  const mid = (parcel.farmerMiddleName || '').trim();
+  const suffix = (parcel.farmerSuffix || '').replace(/,/g, '').trim();
+
+  // Store suffixed names as four parts so multiword given and middle names round-trip.
+  if (suffix) return [fam, giv, mid, suffix].join(', ');
+  if (fam && giv) return `${fam}, ${[giv, mid].filter(Boolean).join(' ')}`;
+  return parcel.raiserName?.trim() || [fam, giv, mid].filter(Boolean).join(' ') || 'Registered Farmer';
+}
+
 /**
  * Sanitizes FarmParcel into exact column schema required by the 'farmers' table in Supabase
  * Enforces numeric-only contact number (11-digit mobile format 09XXXXXXXXX)
@@ -895,19 +915,6 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
     }
   }
 
-  // Combined farmer_name: pinagsamang Last Name, First Name, at Middle Name
-  const fam = (norm.farmerFamilyName || '').trim();
-  const giv = (norm.farmerGivenName || '').trim();
-  const mid = (norm.farmerMiddleName || '').trim();
-  let farmerName = '';
-  if (fam && giv) {
-    farmerName = `${fam.toUpperCase()}, ${giv}${mid ? ' ' + mid : ''}`.trim();
-  } else if (norm.raiserName) {
-    farmerName = norm.raiserName.trim();
-  } else {
-    farmerName = [fam.toUpperCase(), giv, mid].filter(Boolean).join(' ').trim() || 'Registered Farmer';
-  }
-
   // Optimize payload: never store heavy Base64 strings or blob URLs into database row
   const safePhotoUrl =
     norm.photoUrl && !norm.photoUrl.startsWith('data:') && !norm.photoUrl.startsWith('blob:')
@@ -929,7 +936,7 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
   return {
     id: formattedId,
     rsbsa_number: norm.swineNameOrId || norm.rsbsa_no || '',
-    farmer_name: farmerName,
+    farmer_name: formatFarmerNameForStorage(norm),
     barangay: exactBarangay,
     contact_number,
     lat: Number(norm.lat || 10.5335),
@@ -942,7 +949,7 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
     seed_type: norm.seedType || 'INBRED',
     ecosystem: norm.ecosystem || norm.purpose || 'Irrigated Lowland (NIA)',
     tenure: norm.tenure || norm.sex || 'Owner-Cultivator',
-    cropping_season: norm.croppingSeason || norm.season || 'Wet Season (WS) 2026 (June – Nov 2026)',
+    cropping_season: norm.croppingSeason || norm.season || ACTIVE_SEASON,
     planting_date: norm.plantingDate || null,
     harvest_date: norm.harvestDate || null,
     photo_url: safePhotoUrl,
@@ -959,6 +966,7 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
       estimatedHarvestDate: r.estimatedHarvestDate,
       actualHarvestDate: r.actualHarvestDate,
       harvestDate: r.harvestDate || r.actualHarvestDate || r.estimatedHarvestDate,
+      harvestedAreaHa: r.harvestedAreaHa,
       actualProductionVolumeMt: r.actualProductionVolumeMt,
       actualProductionBags: r.actualProductionBags || r.yieldBags,
       yieldBags: r.yieldBags || r.actualProductionBags,
@@ -994,7 +1002,7 @@ export function sanitizeFarmPayload(parcel: FarmParcel) {
 
   return {
     id: norm.tagNumber,
-    farmer_name: norm.raiserName || `${norm.farmerFamilyName || ''}, ${norm.farmerGivenName || ''}`.trim(),
+    farmer_name: norm.farmerSuffix ? formatFarmerNameForStorage(norm) : norm.raiserName,
     rsbsa_number: rsbsa,
     barangay: (parcel.barangay || norm.barangay || '').trim(),
     area_ha: areaHa,
@@ -1150,7 +1158,6 @@ export const supabaseDb = {
 
     const farmerPayload = sanitizeFarmerPayload(norm);
     let success = false;
-    let hadNetworkError = false;
 
     // 1. Primary insert to 'farmers' table with 6s timeout
     try {
@@ -1175,7 +1182,8 @@ export const supabaseDb = {
           contact_number: farmerPayload.contact_number,
           lat: farmerPayload.lat,
           lng: farmerPayload.lng,
-          area_ha: farmerPayload.area_ha
+          area_ha: farmerPayload.area_ha,
+          seasonal_records: farmerPayload.seasonal_records
         };
         const corePromise = supabaseClient.from('farmers').upsert(corePayload, { onConflict: 'id' });
         const { error: coreErr } = await withTimeout(corePromise, 4000, 'Core upsert timeout');
@@ -1191,12 +1199,11 @@ export const supabaseDb = {
       if (err?.code === '23505' || err?.message?.includes('23505')) {
         throw err;
       }
-      hadNetworkError = true;
       console.warn('Network timeout or error on farmers insert:', err?.message || err);
     }
 
-    // If network failed or timed out, save to offline pending queue so work is never lost
-    if (hadNetworkError && !success) {
+    // Keep the full parcel queued until its seasonal records can be persisted.
+    if (!success) {
       saveOfflinePendingFarm(norm);
       return true;
     }
@@ -1250,7 +1257,8 @@ export const supabaseDb = {
           contact_number: farmerPayload.contact_number,
           lat: farmerPayload.lat,
           lng: farmerPayload.lng,
-          area_ha: farmerPayload.area_ha
+          area_ha: farmerPayload.area_ha,
+          seasonal_records: farmerPayload.seasonal_records
         };
         try {
           await withTimeout(supabaseClient.from('farmers').upsert(corePayload, { onConflict: 'id' }), 4000);

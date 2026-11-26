@@ -9,7 +9,7 @@ import {
   getDisplayBarangay,
   getAssignedLftForBarangay
 } from '../data/barangays';
-import { CROPPING_SEASONS, ACTIVE_SEASON, matchesSeasonFilter, getShortSeasonName } from '../data/seasonalProduction';
+import { getParcelSeasonOptions, hasActualProduction, ACTIVE_SEASON, matchesSeasonFilter, getShortSeasonName } from '../data/seasonalProduction';
 import { DaLogo, SilagoSeal, BagOngSilagoLogo, BagongPilipinasLogo } from '../components/Seals';
 import {
   Printer,
@@ -85,7 +85,7 @@ const parseFarmerName = (parcel: FarmParcel) => {
   if (parcel.farmerFamilyName && parcel.farmerGivenName) {
     return {
       family: parcel.farmerFamilyName.trim().toUpperCase(),
-      given: parcel.farmerGivenName.trim().toUpperCase(),
+      given: [parcel.farmerGivenName.trim().toUpperCase(), parcel.farmerSuffix?.trim()].filter(Boolean).join(' '),
       middle: (parcel.farmerMiddleName || '').trim().toUpperCase()
     };
   }
@@ -151,12 +151,6 @@ interface ReportsViewProps {
 
 const getOfficeReportDate = () =>
   new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-
-const hasActualProduction = (
-  record: Pick<SeasonalProductionRecord, 'productionStatus' | 'actualProductionVolumeMt'>
-) => record.productionStatus === 'Harvest Completed'
-  || record.productionStatus === 'Crop Failure / Damaged'
-  || (record.productionStatus === 'Standing Crop' && record.actualProductionVolumeMt > 0);
 
 const getReportParcelAreaHa = (parcel: FarmParcel) => {
   const area = Number(parcel.areaHa || parcel.weightKg || parcel.farm_area_ha || 0);
@@ -334,6 +328,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
     return sortParcelsAlphabetically(filtered);
   }, [parcels, selectedBarangay]);
 
+  const seasonOptions = useMemo(() => getParcelSeasonOptions(parcels), [parcels]);
+
   // Extract seasonal production record for each parcel matching selected season
   const parcelsWithSeason = useMemo(() => {
     return reportParcels.map((p) => {
@@ -341,7 +337,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
       if (selectedSeason === 'ALL_SEASONS') {
         const totalVol = records.reduce((sum, r) => sum + (r.actualProductionVolumeMt || 0), 0);
         const totalBags = records.reduce((sum, r) => sum + (r.yieldBags ?? r.actualProductionBags ?? Math.round((r.actualProductionVolumeMt || 0) * 20)), 0);
-        const area = getReportParcelAreaHa(p);
+        const area = records.filter(hasActualProduction).reduce((sum, record) => sum + (record.harvestedAreaHa ?? getReportParcelAreaHa(p)), 0);
         const avgYield = area > 0 ? Number((totalVol / area).toFixed(2)) : 0;
         const latestRec = records[0];
         const hasHistoricalProduction = records.some(hasActualProduction);
@@ -358,6 +354,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
           estimatedHarvestDate: latestRec?.estimatedHarvestDate || '',
           actualHarvestDate: latestRec?.actualHarvestDate,
           harvestDate: latestRec?.harvestDate || latestRec?.actualHarvestDate || '',
+          harvestedAreaHa: area,
           actualProductionVolumeMt: Number(totalVol.toFixed(2)),
           actualProductionBags: totalBags,
           yieldBags: totalBags,
@@ -376,15 +373,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
         };
       }
 
-      const matched = records.find((r) => matchesSeasonFilter(r.season, selectedSeason) || matchesSeasonFilter(r.seasonName, selectedSeason)) || {
+      const matched: SeasonalProductionRecord = records.find((r) => matchesSeasonFilter(r.season, selectedSeason) || matchesSeasonFilter(r.seasonName, selectedSeason)) || {
           id: `PROD-${p.tagNumber}-NO-RECORD`,
           parcelTag: p.tagNumber,
           season: selectedSeason,
           seasonName: getShortSeasonName(selectedSeason),
-          seedVariety: p.breed || 'Not recorded',
-          varietyPlanted: p.breed || 'Not recorded',
+          seedVariety: 'Not recorded',
+          varietyPlanted: 'Not recorded',
           seedType: (p.seedType as any) || 'UNKNOWN',
-          plantingDate: p.plantingDate || '',
+          plantingDate: '',
           estimatedHarvestDate: '',
           actualProductionVolumeMt: 0,
           actualProductionBags: 0,
@@ -432,7 +429,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   );
 
   const actualProductionAreaHa = useMemo(
-    () => parcelsWithSeason.reduce((sum, item) => sum + (hasActualProduction(item.seasonRecord) ? getReportParcelAreaHa(item.parcel) : 0), 0),
+    () => parcelsWithSeason.reduce((sum, item) => sum + (hasActualProduction(item.seasonRecord) ? item.seasonRecord.harvestedAreaHa ?? getReportParcelAreaHa(item.parcel) : 0), 0),
     [parcelsWithSeason]
   );
 
@@ -455,12 +452,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
       const brgyArea = brgyParcels.reduce((sum, p) => sum + getReportParcelAreaHa(p), 0);
       const matchingProductionRecords = parcelProductionRecords.flatMap(({ records }) => records);
       const actualAreaHa = parcelProductionRecords.reduce(
-        (sum, entry) => sum + (entry.records.length > 0 ? getReportParcelAreaHa(entry.parcel) : 0),
+        (sum, { parcel, records }) => sum + records.reduce((area, record) => area + (record.harvestedAreaHa ?? getReportParcelAreaHa(parcel)), 0),
         0
       );
       const brgyProd = matchingProductionRecords.reduce((sum, record) => sum + (record.actualProductionVolumeMt || 0), 0);
       const avgYield = actualAreaHa > 0 ? Number((brgyProd / actualAreaHa).toFixed(2)) : 0;
-      const varietiesSet = new Set(brgyParcels.map((p) => p.breed).filter(Boolean));
+      const varietiesSet = new Set(matchingProductionRecords.map((record) => record.seedVariety).filter(Boolean));
 
       return {
         barangay: brgy,
@@ -1479,7 +1476,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
               className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-900 focus:ring-2 focus:ring-emerald-600 cursor-pointer shadow-2xs truncate"
             >
               <option value="ALL_SEASONS">All Seasons (Consolidated Historical)</option>
-              {CROPPING_SEASONS.map((s) => (
+              {seasonOptions.map((s) => (
                 <option key={s} value={s}>
                   {getShortSeasonName(s)}
                 </option>

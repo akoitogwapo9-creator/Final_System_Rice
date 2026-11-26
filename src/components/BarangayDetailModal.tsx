@@ -18,7 +18,7 @@ interface BarangayDetailModalProps {
   parcels: FarmParcel[];
   onClose: () => void;
   onSelectParcel: (parcel: FarmParcel) => void;
-  onViewOnMap: (barangay: Barangay) => void;
+  onViewOnMap?: (barangay: Barangay) => void;
   onUpdateBarangay?: (name: string, updates: Partial<Barangay>) => void;
   canEdit?: boolean;
 }
@@ -245,17 +245,19 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
                 </div>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                onViewOnMap(barangay);
-              }}
-              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
-            >
-              <Compass className="w-4 h-4" />
-              Focus on GIS Map
-            </button>
+            {onViewOnMap && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onViewOnMap(barangay);
+                }}
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs shrink-0"
+              >
+                <Compass className="w-4 h-4" />
+                Focus on GIS Map
+              </button>
+            )}
           </div>
 
           {/* Terrain & Puroks (Editable) */}

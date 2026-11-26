@@ -16,7 +16,6 @@ import {
   Clock,
   Menu,
   X,
-  Compass,
   Megaphone,
   Download,
   Users,
@@ -566,14 +565,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     <span>{landingPageConfig?.heroSignInBtnText || 'Sign In as Central Admin'}</span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => onNavigateToPortalTab('map')}
-                    className="inline-flex cursor-pointer items-center gap-2 rounded border border-white/25 bg-white/10 px-5 py-2.5 text-xs font-semibold text-white transition hover:bg-white/15 sm:text-sm"
-                  >
-                    <Compass className="h-4 w-4" /> {landingPageConfig?.heroGisBtnText || 'Explore GIS Map'}
-                  </button>
-                  <PWAInstallButton />
                 </div>
               )}
             </div>
@@ -1092,10 +1083,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         parcels={parcels}
         onClose={() => setSelectedBarangayModal(null)}
         onSelectParcel={(p) => setSelectedParcelModal(p)}
-        onViewOnMap={(b) => {
+        onViewOnMap={currentUser ? (b) => {
           if (onSelectBarangayForMap) onSelectBarangayForMap(b);
           onNavigateToPortalTab('map');
-        }}
+        } : undefined}
         onUpdateBarangay={handleUpdateBarangay}
         canEdit={true}
       />

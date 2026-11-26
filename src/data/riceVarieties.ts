@@ -15,7 +15,7 @@ export interface RiceVariety {
   recommendedSeason?: string;
 }
 
-export const RICE_VARIETIES: RiceVariety[] = [
+const LEGACY_RICE_VARIETIES: RiceVariety[] = [
   // ==========================================
   // CERTIFIED SEEDS (INBRED)
   // ==========================================
@@ -364,6 +364,48 @@ export const RICE_VARIETIES: RiceVariety[] = [
     recommendedSeason: 'Wet Season Local'
   }
 ];
+
+const REQUIRED_RICE_VARIETIES: RiceVariety[] = [
+  { ...LEGACY_RICE_VARIETIES[0], name: '222' },
+  ...([
+    ['406', 'Rc406', 'INBRED'],
+    ['Batare', 'BATARE', 'HYBRID'],
+    ['Long Ping', 'LONG PING', 'HYBRID'],
+    ['SL-Agritech', 'SL-AGRITECH', 'HYBRID'],
+    ['Jackpot', 'JACKPOT', 'HYBRID']
+  ] as const).map(([name, code, seedType]): RiceVariety => ({
+    name,
+    code,
+    seedType,
+    category: seedType === 'HYBRID' ? 'Hybrid_Seeds' : 'Certified_Seeds',
+    newlyPlantedDays: 7,
+    vegetativeMaturityNet: 50,
+    reproductiveMaturityDas: 85,
+    maturityDays: 115,
+    ecosystem: '',
+    aveYieldMt: 0,
+    potentialYieldMt: 0
+  })),
+  { ...LEGACY_RICE_VARIETIES.find((variety) => variety.code === 'BIGANTE')!, name: 'Bigante' }
+];
+
+export function mergeRequiredRiceVarieties(varieties: RiceVariety[]): RiceVariety[] {
+  const required = REQUIRED_RICE_VARIETIES.map((entry) => {
+    const saved = varieties.find((variety) => variety.name.toLowerCase() === entry.name.toLowerCase());
+    return { ...entry, ...saved, name: entry.name, seedType: entry.seedType, category: entry.category };
+  });
+  return [...required, ...varieties.filter((variety) => !required.some(
+    (entry) => entry.name.toLowerCase() === variety.name.toLowerCase()
+  ))];
+}
+
+export const RICE_VARIETIES = mergeRequiredRiceVarieties(LEGACY_RICE_VARIETIES);
+
+export const SEED_TYPE_LABELS = {
+  HYBRID: 'Hybrid',
+  INBRED: 'Inbred (RCEF)',
+  UNKNOWN: 'Unknown / Farmer-Saved Seeds'
+} as const;
 
 export interface CropGrowthStageCalc {
   stage: string;

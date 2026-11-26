@@ -1,13 +1,20 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useId, useMemo, useRef } from 'react';
 import { FarmParcel } from '../types';
 import {
   BARANGAYS,
+  BARANGAY_PARCEL_CODES,
+  OfficialBarangay,
   OFFICIAL_15_BARANGAYS,
   getAssignedLftForBarangay,
+  getBarangayZone,
+  getDisplayBarangay,
   getUserAssignedBarangays,
   isUserAuthorizedForBarangay,
   matchBarangay
 } from '../data/barangays';
+import { ACTIVE_SEASON } from '../data/seasonalProduction';
+import { RegistrationLocationMap } from './RegistrationLocationMap';
+import { SafeImage } from './SafeImage';
 import { useApp } from '../context/AppContext';
 import { uploadFarmPhoto, supabaseClient, parseFarmerName, checkDuplicateRsbsa, checkDuplicateFarmerName, withTimeout } from '../utils/supabaseClient';
 import {
@@ -42,7 +49,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 
-type RegistrationStep = 1 | 2;
+type RegistrationStep = 1 | 2 | 3;
 
 const REGISTRATION_STEPS: Array<{
   step: RegistrationStep;
@@ -51,7 +58,8 @@ const REGISTRATION_STEPS: Array<{
   icon: React.ElementType;
 }> = [
   { step: 1, shortLabel: 'Farmer & RSBSA', label: '1. Farmer & RSBSA Profile', icon: User },
-  { step: 2, shortLabel: 'Location & GPS', label: '2. Farm Location & GPS Coordinates', icon: MapPin }
+  { step: 2, shortLabel: 'Location & GPS', label: '2. Farm Location & GPS', icon: MapPin },
+  { step: 3, shortLabel: 'Confirmation', label: '3. Confirmation', icon: CheckCircle2 }
 ];
 
 interface AddParcelModalProps {
@@ -111,14 +119,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
   // Determine the effective default barangay for new registrations
   const effectiveDefaultBarangay = useMemo(() => {
-    if (assignedBarangays && assignedBarangays.length > 0) {
-      const match = assignedBarangays.find((b) =>
-        matchBarangay(defaultBarangay || '', b)
-      );
-      return match || assignedBarangays[0];
-    }
-    return defaultBarangay || availableBarangays[0]?.name || OFFICIAL_15_BARANGAYS[0];
-  }, [assignedBarangays, defaultBarangay, availableBarangays]);
+    return availableBarangays.find((barangay) => matchBarangay(barangay.name, defaultBarangay || ''))?.name
+      || availableBarangays[0]?.name
+      || OFFICIAL_15_BARANGAYS[0];
+  }, [defaultBarangay, availableBarangays]);
 
   // Confirm delete dialog in edit mode
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -152,6 +156,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
   const customRegSections = formSchema.getCustomSections('registration');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [parcelIdOverridden, setParcelIdOverridden] = useState(false);
+  const [fallbackParcelId, setFallbackParcelId] = useState('');
+  const reviewScrollRef = useRef<HTMLDivElement>(null);
+  const suffixId = useId();
   const [activeStep, setActiveStep] = useState<RegistrationStep>(1);
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
 
@@ -186,7 +194,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     syncStatus: 'Live Synced',
     targetYieldMt: 6.1,
     plantingDate: '',
-    croppingSeason: 'Wet Season (WS) 2026 (June – Nov 2026)',
+    croppingSeason: ACTIVE_SEASON,
     commodity: 'Rice',
     pestAdvisoryNotice: 'Routine water and nutrient monitoring advised.'
   });
@@ -205,6 +213,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
         farmerFamilyName: fam,
         farmerGivenName: giv,
         farmerMiddleName: mid,
+        farmerSuffix: editingParcel.farmerSuffix ?? parsedName.suffix,
         weightKg:
           Number(editingParcel.weightKg || editingParcel.areaHa || editingParcel.farm_area_ha) ||
           1.25,
@@ -220,12 +229,16 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       );
     } else {
       setCustomValues({});
-      const randomTag = `FARMER-SLG-${(defaultBarangay || 'POB1').substring(0, 4).toUpperCase().replace(/\s+/g, '')}-${Math.floor(
-        1000 + Math.random() * 9000
-      )}`;
       const randomRsbsa = `08-64-16-${String(Math.floor(1 + Math.random() * 15)).padStart(3, '0')}-${String(
         Math.floor(1000 + Math.random() * 9000)
       )}`;
+
+      const farmBarangay = availableBarangays.find((barangay) =>
+        matchBarangay(barangay.name, initialCoords?.barangay || ''))?.name || effectiveDefaultBarangay;
+      const parcelCode = BARANGAY_PARCEL_CODES[farmBarangay as OfficialBarangay];
+      const randomTag = `FARMER-SLG-${parcelCode}-${Math.floor(1000 + Math.random() * 9000)}`;
+      setFallbackParcelId(randomTag);
+      const residentialAddress = `${farmBarangay}, Silago, Southern Leyte`;
 
       setFormData({
         tagNumber: randomTag,
@@ -236,12 +249,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
         raiserName: '',
         birthday: '1975-06-15',
         contactNumber: '09175551234',
-        barangay: (initialCoords?.barangay && availableBarangays.some(b => matchBarangay(b.name, initialCoords.barangay!)))
-          ? initialCoords.barangay
-          : effectiveDefaultBarangay,
+        barangay: farmBarangay,
         purok: 'Purok Riverside',
-        address: `${(initialCoords?.barangay && availableBarangays.some(b => matchBarangay(b.name, initialCoords.barangay!))) ? initialCoords.barangay : effectiveDefaultBarangay}, Silago, Southern Leyte`,
-        residential_address: `${(initialCoords?.barangay && availableBarangays.some(b => matchBarangay(b.name, initialCoords.barangay!))) ? initialCoords.barangay : effectiveDefaultBarangay}, Silago, Southern Leyte`,
+        address: residentialAddress,
+        residential_address: residentialAddress,
         breed: 'Not yet assigned',
         seedType: 'INBRED',
         sex: tenures[0] || 'Owner-Cultivator',
@@ -259,22 +270,19 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
         healthStatus: 'Registered (Pending Crop Form)',
         biosecurityScore: 'Georeferenced (GPS Polygon Mapped)',
         registrationDate: new Date().toISOString().split('T')[0],
-        focalPerson: getAssignedLftForBarangay(
-          (initialCoords?.barangay && availableBarangays.some(b => matchBarangay(b.name, initialCoords.barangay!)))
-            ? initialCoords.barangay
-            : effectiveDefaultBarangay
-        ).name,
+        focalPerson: getAssignedLftForBarangay(farmBarangay).name,
         lat: initialCoords ? Number(initialCoords.lat.toFixed(6)) : 10.5335,
         lng: initialCoords ? Number(initialCoords.lng.toFixed(6)) : 125.162,
         boundaryCoords: initialCoords?.boundaryCoords,
         syncStatus: 'Live Synced',
         targetYieldMt: 6.0,
         plantingDate: '',
-        croppingSeason: seasons[0] || 'Wet Season (WS) 2026 (June – Nov 2026)',
+        croppingSeason: seasons[0] || ACTIVE_SEASON,
         commodity: 'Rice',
         pestAdvisoryNotice: 'Routine water and nutrient monitoring advised.'
       });
     }
+    setParcelIdOverridden(false);
     setConfirmDelete(false);
     setError(null);
     setDuplicateRsbsaMatch(null);
@@ -285,6 +293,23 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     setIsSubmitting(false);
     setActiveStep(1);
   }, [editingParcel, defaultBarangay, effectiveDefaultBarangay, initialCoords, isOpen]);
+
+  useEffect(() => {
+    if (reviewScrollRef.current) reviewScrollRef.current.scrollTop = 0;
+  }, [activeStep]);
+
+  const residentialBarangay = getDisplayBarangay(
+    (formData.residential_address || formData.address || '').replace(/,\s*Silago,\s*Southern Leyte$/i, '').trim()
+  );
+  const residentialOptions: readonly string[] = OFFICIAL_15_BARANGAYS;
+  const selectedResidentialBarangay = residentialBarangay || formData.barangay || effectiveDefaultBarangay;
+
+  const rawParcelId = formData.tagNumber?.trim() || fallbackParcelId;
+  const registrationParcelId = editingParcel?.tagNumber || (
+    rawParcelId.startsWith('FARMER-SLG-')
+      ? rawParcelId
+      : `FARMER-SLG-${rawParcelId.replace(/^FARMER-/, '').replace(/^SLG-/, '')}`
+  );
 
   // 1. Real-time Duplicate Check for RSBSA Number (both local state and Supabase query)
   useEffect(() => {
@@ -511,14 +536,16 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
   ]);
 
   // Keep Full Name synchronized cleanly without leaving trailing commas
-  const handleNameChange = (field: 'family' | 'given' | 'middle', val: string) => {
+  const handleNameChange = (field: 'family' | 'given' | 'middle' | 'suffix', val: string) => {
     setFormData((prev) => {
       const fam = field === 'family' ? val : prev.farmerFamilyName || '';
       const giv = field === 'given' ? val : prev.farmerGivenName || '';
       const mid = field === 'middle' ? val : prev.farmerMiddleName || '';
 
+      const suffix = field === 'suffix' ? val : prev.farmerSuffix || '';
+
       const famClean = fam.trim().toUpperCase();
-      const givenPart = [giv.trim(), mid.trim()].filter(Boolean).join(' ').toUpperCase();
+      const givenPart = [giv.trim().toUpperCase(), mid.trim().toUpperCase(), suffix.trim()].filter(Boolean).join(' ');
       const combined =
         famClean && givenPart ? `${famClean}, ${givenPart}` : famClean || givenPart;
 
@@ -527,6 +554,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
         farmerFamilyName: field === 'family' ? val : prev.farmerFamilyName,
         farmerGivenName: field === 'given' ? val : prev.farmerGivenName,
         farmerMiddleName: field === 'middle' ? val : prev.farmerMiddleName,
+        farmerSuffix: suffix,
         raiserName: combined
       };
     });
@@ -625,6 +653,9 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       ) {
         return `${formSchema.getLabel('reg-middle-name', 'Middle Name')} is required.`;
       }
+      if (formSchema.isVisible('reg-suffix') && formSchema.isRequired('reg-suffix') && !formData.farmerSuffix?.trim()) {
+        return `${formSchema.getLabel('reg-suffix', 'Suffix')} is required.`;
+      }
       if (!formData.farmerFamilyName?.trim() && !formData.farmerGivenName?.trim() && !formData.raiserName?.trim()) {
         return 'Farmer Name is required (Family Name and Given Name).';
       }
@@ -696,7 +727,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       }
       const lat = Number(formData.lat);
       const lng = Number(formData.lng);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0) {
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0 || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
         return 'Valid Latitude and Longitude GPS coordinates are required.';
       }
       if (
@@ -720,6 +751,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
   };
 
   const handleNextStep = () => {
+    if (geoLoading || isUploadingPhoto || isUploadingFieldPhoto) return;
     setError(null);
     setUniqueViolationAlert(null);
     const stepErr = validateStep(activeStep);
@@ -727,7 +759,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       setError(stepErr);
       return;
     }
-    if (activeStep < 2) {
+    if (activeStep < 3) {
       setActiveStep((prev) => (prev + 1) as RegistrationStep);
     }
   };
@@ -741,6 +773,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
   // 3. Submission handler with Supabase unique constraint (23505) error handling
   const submitRegistration = async () => {
+    if (activeStep !== 3 || isSubmitting || isUploadingPhoto || isUploadingFieldPhoto || geoLoading) return;
     setError(null);
     setUniqueViolationAlert(null);
 
@@ -769,23 +802,11 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       formData.raiserName ||
       `${formData.farmerFamilyName ? formData.farmerFamilyName.toUpperCase() + ', ' : ''}${
         formData.farmerGivenName || ''
-      } ${formData.farmerMiddleName || ''}`.trim();
+      } ${[formData.farmerMiddleName, formData.farmerSuffix].filter(Boolean).join(' ')}`.trim();
 
     const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
-    const rawTag = (formData.tagNumber || '').trim();
-    let formattedTag = rawTag;
-    if (!formattedTag) {
-      formattedTag = `FARMER-SLG-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    } else if (!formattedTag.startsWith('FARMER-SLG-')) {
-      if (formattedTag.startsWith('FARMER-')) {
-        formattedTag = `FARMER-SLG-${formattedTag.replace(/^FARMER-/, '')}`;
-      } else if (formattedTag.startsWith('SLG-')) {
-        formattedTag = `FARMER-${formattedTag}`;
-      } else {
-        formattedTag = `FARMER-SLG-${formattedTag}`;
-      }
-    }
+    const formattedTag = registrationParcelId;
 
     const mergedCustomValues = mergeCustomFieldValues(
       formSchema.getCustomFieldsForTarget('registration'),
@@ -800,6 +821,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       farmerFamilyName: formData.farmerFamilyName || '',
       farmerGivenName: formData.farmerGivenName || '',
       farmerMiddleName: formData.farmerMiddleName || '',
+      farmerSuffix: formData.farmerSuffix?.trim() || '',
       birthday: formData.birthday || '',
       farmLocation: formData.farmLocation || targetBrgy.toUpperCase(),
       raiserName: finalRaiserName,
@@ -839,8 +861,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       isPendingSync: isOffline,
       targetYieldMt: Number(formData.targetYieldMt) || 6.0,
       plantingDate: formData.plantingDate || '',
-      croppingSeason: formData.croppingSeason || 'Wet Season (WS) 2026 (June – Nov 2026)',
-      season: formData.croppingSeason || 'Wet Season (WS) 2026 (June – Nov 2026)',
+      croppingSeason: formData.croppingSeason || ACTIVE_SEASON,
+      season: formData.croppingSeason || ACTIVE_SEASON,
       commodity: 'Rice',
       commodity_planted: 'Rice',
       pestAdvisoryNotice: formData.pestAdvisoryNotice || 'Routine monitoring advised.',
@@ -940,13 +962,9 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (activeStep < 2) {
-      handleNextStep();
-      return;
-    }
-    await submitRegistration();
+    if (activeStep < 3) handleNextStep();
   };
 
   const handleDelete = () => {
@@ -995,30 +1013,32 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                   <button
                     key={item.step}
                     type="button"
+                    disabled={item.step >= activeStep || isSubmitting}
+                    aria-current={isActive ? "step" : undefined}
                     onClick={() => {
                       setError(null);
                       setActiveStep(item.step);
                     }}
                     className={`py-2.5 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
                       isActive
-                        ? 'border-emerald-800 text-emerald-900 font-bold'
+                        ? 'border-blue-700 text-blue-900 font-bold'
                         : 'border-transparent text-slate-500 hover:text-slate-800'
                     }`}
                   >
                     <Icon className="w-3.5 h-3.5 shrink-0" />
-                    <span>{item.step === 1 ? sec1Label : sec2Label}</span>
+                    <span>{item.step === 1 ? sec1Label : item.step === 2 ? sec2Label : item.label}</span>
                   </button>
                 );
               })}
             </div>
             <span className="text-[11px] font-medium text-slate-500 hidden sm:inline">
-              Step {activeStep} of 2
+              Step {activeStep} of {REGISTRATION_STEPS.length}
             </span>
           </div>
 
-          {/* Form Body - 2 Separated Farmer & Location Steps */}
+
           <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
-            <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 bg-slate-100/70">
+            <div ref={reviewScrollRef} className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 bg-slate-100/70">
               {error && (
                 <div className="p-3 bg-red-50 border border-red-300 rounded-md flex items-center gap-2 text-xs text-red-800">
                   <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
@@ -1079,7 +1099,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
               )}
 
               {/* ========================================================
-                  SECTION 1: FARMER & RSBSA IDENTIFICATION (Step 1 of 2)
+                  SECTION 1: FARMER & RSBSA IDENTIFICATION
                   ======================================================== */}
               {activeStep === 1 && (
                 <OfficeSectionCard title={sec1Label}>
@@ -1140,10 +1160,21 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                           type="text"
                           required={formSchema.isRequired('reg-parcel-id')}
                           value={formData.tagNumber || ''}
-                          onChange={(e) => setFormData({ ...formData, tagNumber: e.target.value })}
+                          readOnly={Boolean(editingParcel)}
+                          onChange={(e) => {
+                            setParcelIdOverridden(true);
+                            setFormData({ ...formData, tagNumber: e.target.value });
+                          }}
                           placeholder={formSchema.getPlaceholder('reg-parcel-id', 'e.g. FARMER-SLG-POB1-101')}
                           className={`${OFFICE_INPUT_CLASS} font-mono font-semibold`}
                         />
+                        <p className="text-[11px] text-slate-500">
+                          {editingParcel
+                            ? 'Saved parcel ID'
+                            : parcelIdOverridden
+                              ? 'Manual ID. Barangay changes keep this value.'
+                              : 'The code follows the residential barangay until you edit this ID.'}
+                        </p>
                       </div>
                     )}
 
@@ -1190,7 +1221,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                   </div>
 
                   {/* Farmer Names (Family Name, Given Name, Middle Name) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
                     {formSchema.isVisible('reg-family-name') && (
                       <div className="space-y-1">
                         <label className={OFFICE_LABEL_CLASS}>
@@ -1245,6 +1276,28 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                           placeholder={formSchema.getPlaceholder('reg-middle-name', 'e.g. CABUG-OS')}
                           className={`${OFFICE_INPUT_CLASS} uppercase`}
                         />
+                      </div>
+                    )}
+                    {formSchema.isVisible('reg-suffix') && (
+                      <div className="space-y-1">
+                        <label htmlFor={suffixId} className={OFFICE_LABEL_CLASS}>
+                          {formSchema.getLabel('reg-suffix', 'Suffix')}{' '}
+                          {formSchema.isRequired('reg-suffix') && <span className="text-red-600">*</span>}
+                        </label>
+                        <input
+                          id={suffixId}
+                          type="text"
+                          list={`${suffixId}-options`}
+                          maxLength={24}
+                          required={formSchema.isRequired('reg-suffix')}
+                          value={formData.farmerSuffix || ''}
+                          onChange={(e) => handleNameChange('suffix', e.target.value.replace(/,/g, ''))}
+                          placeholder={formSchema.getPlaceholder('reg-suffix', 'None')}
+                          className={OFFICE_INPUT_CLASS}
+                        />
+                        <datalist id={`${suffixId}-options`}>
+                          {['Jr.', 'Sr.', 'II', 'III', 'IV'].map((suffix) => <option key={suffix} value={suffix} />)}
+                        </datalist>
                       </div>
                     )}
                   </div>
@@ -1346,24 +1399,32 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                           )}
                         </label>
                         <select
-                          value={
-                            formData.address?.replace(', Silago, Southern Leyte', '').trim() ||
-                            formData.barangay
-                          }
+                          value={selectedResidentialBarangay}
                           onChange={(e) => {
-                            const chosenRes = e.target.value;
+                            const chosenRes = e.target.value as OfficialBarangay;
+                            const code = BARANGAY_PARCEL_CODES[chosenRes];
+                            if (!code) return;
+                            setFallbackParcelId((id) => id.replace(/^FARMER-SLG-[^-]+-/, `FARMER-SLG-${code}-`));
                             setFormData((prev) => ({
                               ...prev,
+                              tagNumber: !editingParcel && !parcelIdOverridden
+                                ? prev.tagNumber?.replace(/^FARMER-SLG-[^-]+-/, `FARMER-SLG-${code}-`)
+                                : prev.tagNumber,
                               address: `${chosenRes}, Silago, Southern Leyte`,
                               residential_address: `${chosenRes}, Silago, Southern Leyte`
                             }));
                           }}
                           className={OFFICE_SELECT_CLASS}
                         >
-                          {OFFICIAL_15_BARANGAYS.map((b) => (
-                            <option key={b} value={b}>
-                              {b}
-                            </option>
+                          {!residentialOptions.includes(selectedResidentialBarangay) && (
+                            <option value={selectedResidentialBarangay}>{selectedResidentialBarangay}</option>
+                          )}
+                          {(['Coastal', 'Upland'] as const).map((zone) => (
+                            <optgroup key={zone} label={zone}>
+                              {OFFICIAL_15_BARANGAYS.filter((b) => getBarangayZone(b) === zone).map((b) => (
+                                <option key={b} value={b}>{b}</option>
+                              ))}
+                            </optgroup>
                           ))}
                         </select>
                       </div>
@@ -1408,7 +1469,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
               )}
 
               {/* ========================================================
-                  SECTION 2: FARM LOCATION & GPS (Step 2 of 2)
+                  SECTION 2: FARM LOCATION & GPS
                   ======================================================== */}
               {activeStep === 2 && (
                 <>
@@ -1454,7 +1515,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                             )}
                           </div>
                           <select
-                            value={formData.barangay}
+                            value={getDisplayBarangay(formData.barangay || effectiveDefaultBarangay)}
                             disabled={isRestrictedForEditing}
                             onChange={(e) => {
                               const newBrgy = e.target.value;
@@ -1462,16 +1523,19 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                               setFormData({
                                 ...formData,
                                 barangay: newBrgy,
+                                farmLocation: newBrgy.toUpperCase(),
                                 focalPerson: assigned.name
                               });
                             }}
                             className={OFFICE_SELECT_CLASS}
                           >
-                            {availableBarangays.map((b) => (
-                              <option key={b.name} value={b.name}>
-                                {b.name}
-                              </option>
-                            ))}
+                            {(['Coastal', 'Upland'] as const).map((zone) => (
+                            <optgroup key={zone} label={zone}>
+                              {availableBarangays.filter((b) => getBarangayZone(b.name) === zone).map((b) => (
+                                <option key={b.name} value={b.name}>{b.name}</option>
+                              ))}
+                            </optgroup>
+                          ))}
                           </select>
                         </div>
                       )}
@@ -1584,6 +1648,16 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                       )}
                     </div>
 
+                    <RegistrationLocationMap
+                      latitude={formData.lat}
+                      longitude={formData.lng}
+                      onPick={(lat, lng) => {
+                        setGeoSuccess(false);
+                        setFormData((prev) => ({ ...prev, lat, lng }));
+                      }}
+                      disabled={geoLoading}
+                    />
+
                     {formSchema.isVisible('reg-field-photo') && (
                       <OfficePhotoField
                         label={`${formSchema.getLabel('reg-field-photo', 'Georeferenced Farm Field Photo (Optional)')}${formSchema.isRequired('reg-field-photo') ? ' *' : ''}`}
@@ -1625,6 +1699,69 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                       </OfficeSectionCard>
                     );
                   })}
+                </>
+              )}
+              {activeStep === 3 && (
+                <>
+                  <p className="text-sm text-slate-700">Review the farmer and farm details before saving.</p>
+                  {[
+                    {
+                      title: sec1Label,
+                      fields: [
+                        ['reg-rsbsa', 'RSBSA No. / Reference', formData.swineNameOrId || 'NO RSBSA'],
+                        ['reg-parcel-id', 'Registration Parcel ID', registrationParcelId],
+                        ['reg-family-name', 'Family Name', formData.farmerFamilyName],
+                        ['reg-given-name', 'Given Name', formData.farmerGivenName],
+                        ['reg-middle-name', 'Middle Name', formData.farmerMiddleName],
+                        ['reg-suffix', 'Suffix', formData.farmerSuffix || 'None'],
+                        ['reg-contact', 'Mobile / Contact No.', formData.contactNumber],
+                        ['reg-birthday', 'Date of Birth', formData.birthday],
+                        ['reg-res-barangay', 'Residential Barangay', selectedResidentialBarangay],
+                        ['', 'Municipality & Province', 'Silago, Southern Leyte']
+                      ],
+                      photo: formData.photoUrl,
+                      photoLabel: formSchema.isVisible('reg-farmer-photo') ? 'Farmer ID Photo' : ''
+                    },
+                    {
+                      title: sec2Label,
+                      fields: [
+                        ['reg-farm-barangay', 'Farm Location Barangay', `${formData.barangay} (${getBarangayZone(formData.barangay || effectiveDefaultBarangay)})`],
+                        ['reg-purok', 'Purok / Sitio', formData.purok],
+                        ['reg-area', 'Farm Area (Hectares)', formData.weightKg],
+                        ['reg-lat', 'Latitude', formData.lat],
+                        ['reg-lng', 'Longitude', formData.lng],
+                        ['', 'GIS boundary vertices', formData.boundaryCoords?.length]
+                      ],
+                      photo: formData.fieldPhotoUrl,
+                      photoLabel: formSchema.isVisible('reg-field-photo') ? 'Farm Field Photo' : ''
+                    },
+                    ...customRegSections.map((section) => ({ title: section.label, fields: [], photo: undefined, photoLabel: '' }))
+                  ].map(({ title, fields, photo, photoLabel }) => (
+                    <OfficeSectionCard key={title} title={title}>
+                      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        {fields.filter(([id]) => !id || formSchema.isVisible(String(id))).map(([id, label, value]) => (
+                          <div key={label}>
+                            <dt className={OFFICE_LABEL_CLASS}>{id ? formSchema.getLabel(String(id), String(label)) : label}</dt>
+                            <dd className="break-words text-sm text-slate-900">{value === '' || value == null ? '—' : value}</dd>
+                          </div>
+                        ))}
+                        {formSchema.getCustomFieldsForSection(title).map((field) => (
+                          <div key={field.id}>
+                            <dt className={OFFICE_LABEL_CLASS}>{field.name}</dt>
+                            <dd className="break-words text-sm text-slate-900">{customValues[field.id] || '—'}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                      {photoLabel && (
+                        <figure className="mt-3">
+                          <figcaption className={OFFICE_LABEL_CLASS}>{photoLabel}</figcaption>
+                          {photo
+                            ? <SafeImage src={photo} alt={photoLabel} className="mt-1 h-28 rounded object-cover" />
+                            : <p className="text-sm text-slate-600">No photo provided</p>}
+                        </figure>
+                      )}
+                    </OfficeSectionCard>
+                  ))}
                 </>
               )}
             </div>
@@ -1675,7 +1812,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                   </>
                 )}
                 <span className="text-[11px] font-medium text-slate-600 hidden sm:inline">
-                  Step {activeStep} of 2
+                  Step {activeStep} of {REGISTRATION_STEPS.length}
                 </span>
               </div>
 
@@ -1695,38 +1832,13 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                     className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-800 rounded-md text-xs font-semibold border border-slate-300 transition flex items-center gap-1.5 cursor-pointer"
                   >
                     <ArrowLeft className="w-3.5 h-3.5" />
-                    <span>Previous</span>
+                    <span>{activeStep === 3 ? 'Back / Edit' : 'Previous'}</span>
                   </button>
                 )}
 
-                {activeStep < 2 && editingParcel && (
+                {activeStep < 3 ? (
                   <button
-                    type="button"
-                    onClick={() => void submitRegistration()}
-                    disabled={
-                      isRestrictedForEditing ||
-                      Boolean(duplicateRsbsaMatch) ||
-                      Boolean(duplicateNameMatch && nameDuplicateResolution !== 'distinct_person') ||
-                      isSubmitting
-                    }
-                    className={`px-4 py-2 rounded-md text-xs font-semibold border transition flex items-center gap-1.5 ${
-                      isRestrictedForEditing ||
-                      Boolean(duplicateRsbsaMatch) ||
-                      Boolean(duplicateNameMatch && nameDuplicateResolution !== 'distinct_person') ||
-                      isSubmitting
-                        ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
-                        : 'bg-white hover:bg-emerald-50 text-emerald-800 border-emerald-700 cursor-pointer'
-                    }`}
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    <span>{isSubmitting ? 'Saving...' : 'Update Registration'}</span>
-                  </button>
-                )}
-
-                {activeStep < 2 ? (
-                  <button
-                    type="button"
-                    onClick={handleNextStep}
+                    type="submit"
                     disabled={
                       isRestrictedForEditing ||
                       Boolean(duplicateRsbsaMatch) ||
@@ -1737,28 +1849,29 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                       Boolean(duplicateRsbsaMatch) ||
                       Boolean(duplicateNameMatch && nameDuplicateResolution !== 'distinct_person')
                         ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                        : 'bg-emerald-800 hover:bg-emerald-900 text-white cursor-pointer'
+                        : 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer'
                     }`}
                   >
-                    <span>Next: {REGISTRATION_STEPS[1].shortLabel}</span>
+                    <span>Next: {REGISTRATION_STEPS[activeStep].shortLabel}</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 ) : (
                   <button
-                    type="submit"
+                    type="button"
+                    onClick={submitRegistration}
                     disabled={
                       isRestrictedForEditing ||
                       Boolean(duplicateRsbsaMatch) ||
                       Boolean(duplicateNameMatch && nameDuplicateResolution !== 'distinct_person') ||
-                      isSubmitting
+                      isSubmitting || isUploadingPhoto || isUploadingFieldPhoto || geoLoading
                     }
                     className={`px-4 py-2 rounded-md text-xs font-semibold transition flex items-center gap-2 ${
                       isRestrictedForEditing ||
                       Boolean(duplicateRsbsaMatch) ||
                       Boolean(duplicateNameMatch && nameDuplicateResolution !== 'distinct_person') ||
-                      isSubmitting
+                      isSubmitting || isUploadingPhoto || isUploadingFieldPhoto || geoLoading
                         ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                        : 'bg-emerald-800 hover:bg-emerald-900 text-white cursor-pointer'
+                        : 'bg-blue-700 hover:bg-blue-800 text-white cursor-pointer'
                     }`}
                     title={
                       duplicateRsbsaMatch
@@ -1781,7 +1894,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                       <>
                         <Save className="w-3.5 h-3.5" />
                         <span>
-                          {editingParcel ? 'Update Registration' : 'Register Farmer & Farm'}
+                          {editingParcel ? 'Confirm & Save Changes' : 'Confirm & Register Farmer & Farm'}
                         </span>
                       </>
                     )}

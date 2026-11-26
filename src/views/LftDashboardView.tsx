@@ -1,3 +1,4 @@
+import { SeasonProductionPanel } from '../components/SeasonProductionPanel';
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { BARANGAYS } from '../data/barangays';
@@ -12,7 +13,6 @@ import {
   Compass,
   Printer,
   Search,
-  Calendar,
   TrendingUp,
   FileSpreadsheet,
   Eye
@@ -38,7 +38,6 @@ export const LftDashboardView: React.FC<LftDashboardViewProps> = ({
 }) => {
   const { parcels, currentUser } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedSeason, setSelectedSeason] = useState('Wet Season (WS) 2026');
 
   const assignedBarangayList = useMemo(() => {
     if (!currentUser) return BARANGAYS.map((b) => b.name);
@@ -178,21 +177,6 @@ export const LftDashboardView: React.FC<LftDashboardViewProps> = ({
         </div>
 
         <div className="bg-gov-canvas/70 border-t border-gov-line px-5 py-2.5 flex flex-wrap items-center justify-between gap-2">
-          <label className="inline-flex items-center gap-1.5 rounded border border-gov-line-strong bg-white px-2.5 py-1.5 text-xs text-gov-ink">
-            <Calendar className="w-3.5 h-3.5 text-gov-muted shrink-0" />
-            <span className="font-semibold">Season:</span>
-            <select
-              value={selectedSeason}
-              onChange={(e) => setSelectedSeason(e.target.value)}
-              className="bg-transparent text-xs font-semibold text-gov-ink outline-none cursor-pointer border-0 py-0"
-              style={{ minHeight: 'unset' }}
-            >
-              <option value="Wet Season (WS) 2026">Wet Season (WS) 2026</option>
-              <option value="Dry Season (DS) 2026">Dry Season (DS) 2026</option>
-              <option value="Wet Season (WS) 2025">Wet Season (WS) 2025</option>
-            </select>
-          </label>
-
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -237,6 +221,8 @@ export const LftDashboardView: React.FC<LftDashboardViewProps> = ({
 
       {/* 4-Column LFT Summary Strip */}
       <OfficeKpiStrip items={kpiItems} />
+
+      <SeasonProductionPanel parcels={lftParcels} onSelectParcel={onSelectParcel} />
 
       {/* Quick Database Navigation Bar */}
       <div className="bg-white border border-gov-line rounded px-4 py-2 text-[11px] flex flex-wrap items-center justify-between gap-2 text-gov-muted">

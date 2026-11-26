@@ -9,7 +9,7 @@ import {
   isUserAuthorizedForBarangay,
   getAssignedLftForBarangay
 } from '../data/barangays';
-import { CROPPING_SEASONS, ACTIVE_SEASON, matchesSeasonFilter, getShortSeasonName } from '../data/seasonalProduction';
+import { getParcelSeasonOptions, getSeasonRecord, hasActualProduction, ACTIVE_SEASON, matchesSeasonFilter, getShortSeasonName } from '../data/seasonalProduction';
 import { FarmParcel, SeasonalProductionRecord } from '../types';
 import { getLandPhoto, getFarmerPhoto } from '../data/photos';
 import { calculateCropGrowthStage, RICE_VARIETIES } from '../data/riceVarieties';
@@ -308,7 +308,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       const fam = parcel.farmerFamilyName.trim().toUpperCase();
       const giv = parcel.farmerGivenName.trim();
       const mid = parcel.farmerMiddleName ? ` ${parcel.farmerMiddleName.trim()}` : '';
-      const suf = (parcel as any).farmerSuffix || (parcel as any).suffix ? ` ${(parcel as any).farmerSuffix || (parcel as any).suffix}` : '';
+      const suf = parcel.farmerSuffix?.trim() ? ` ${parcel.farmerSuffix.trim()}` : '';
       return `${fam}, ${giv}${mid}${suf}`.trim();
     }
     if (parcel.raiserName && parcel.raiserName.trim()) {
@@ -406,7 +406,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       const currentRecord = selectedSeason === 'ALL_SEASONS'
         ? p.seasonalRecords?.[0]
         : p.seasonalRecords?.find((r) => matchesSeasonFilter(r.season, selectedSeason) || matchesSeasonFilter(r.seasonName, selectedSeason));
-      const activeBreed = currentRecord ? (currentRecord.varietyPlanted || currentRecord.seedVariety) : p.breed;
+      const activeBreed = currentRecord?.seedVariety || (matchesSeasonFilter(p.croppingSeason || p.season, selectedSeason) ? p.breed : '');
 
       const matchesVariety =
         selectedVariety === 'ALL' ||
@@ -510,39 +510,17 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     return (totalAreaMapped / filteredParcels.length).toFixed(2);
   }, [totalAreaMapped, filteredParcels.length]);
 
-  const seasonalProductionStats = useMemo(() => {
-    let totalProdMt = 0;
-    let totalBags = 0;
-    filteredParcels.forEach((p) => {
-      const records = p.seasonalRecords || [];
-      if (selectedSeason === 'ALL_SEASONS') {
-        if (records.length > 0) {
-          records.forEach((r) => {
-            totalProdMt += (r.actualProductionVolumeMt || r.yieldMetricTons || 0);
-            totalBags += (r.yieldBags ?? r.actualProductionBags ?? Math.round((r.actualProductionVolumeMt || 0) * 20));
-          });
-        } else {
-          totalProdMt += (p.weightKg || 1) * 4.8;
-          totalBags += Math.round((p.weightKg || 1) * 4.8 * 20);
-        }
-      } else {
-        const rec = records.find((r) => matchesSeasonFilter(r.season, selectedSeason) || matchesSeasonFilter(r.seasonName, selectedSeason)) || records[0];
-        if (rec) {
-          totalProdMt += (rec.actualProductionVolumeMt || rec.yieldMetricTons || 0);
-          totalBags += (rec.yieldBags ?? rec.actualProductionBags ?? Math.round((rec.actualProductionVolumeMt || 0) * 20));
-        } else {
-          totalProdMt += (p.weightKg || 1) * 4.8;
-          totalBags += Math.round((p.weightKg || 1) * 4.8 * 20);
-        }
-      }
-    });
-    const avgYield = totalAreaMapped > 0 ? Number((totalProdMt / totalAreaMapped).toFixed(2)) : 0;
-    return {
-      totalProdMt: Number(totalProdMt.toFixed(2)),
-      totalBags: totalBags || Math.round(totalProdMt * 20),
-      avgYieldMtPerHa: avgYield
-    };
-  }, [filteredParcels, selectedSeason, totalAreaMapped]);
+  const seasonOptions = useMemo(() => getParcelSeasonOptions(parcels), [parcels]);
+  const getSelectedProduction = (parcel: FarmParcel) => {
+    const records = (parcel.seasonalRecords || []).filter((record) =>
+      matchesSeasonFilter(record.season, selectedSeason) && hasActualProduction(record)
+    );
+    return records.length ? records.reduce((sum, record) => sum + record.actualProductionVolumeMt, 0) : undefined;
+  };
+  const displayProduction = (parcel: FarmParcel) => {
+    const volume = getSelectedProduction(parcel);
+    return volume === undefined ? '—' : `${volume.toFixed(2)} MT`;
+  };
 
   const handleStartInlineEdit = (e: React.MouseEvent, parcel: FarmParcel) => {
     e.stopPropagation();
@@ -611,7 +589,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     const fam = inlineEditData.farmerFamilyName.trim().toUpperCase();
     const giv = inlineEditData.farmerGivenName.trim();
     const mid = inlineEditData.farmerMiddleName.trim();
-    const fullRaiserName = fam && giv ? `${fam}, ${giv} ${mid}`.trim() : (fam || giv || 'UNKNOWN');
+    const suffix = parcels.find((parcel) => parcel.tagNumber === tagNumber)?.farmerSuffix;
+    const givenNames = [giv, mid, suffix].filter(Boolean).join(' ');
+    const fullRaiserName = fam && givenNames ? `${fam}, ${givenNames}` : (fam || givenNames || 'UNKNOWN');
 
     updateParcel(tagNumber, {
       swineNameOrId: inlineEditData.swineNameOrId.trim(),
@@ -650,7 +630,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
   const handleOpenSeasonalInput = (parcel: FarmParcel, record?: SeasonalProductionRecord) => {
     setSeasonalFarmer(parcel);
-    setSeasonalRecordToEdit(record || parcel.seasonalRecords?.find((r) => r.season === selectedSeason) || null);
+    setSeasonalRecordToEdit(record || (selectedSeason === 'ALL_SEASONS' ? null : getSeasonRecord(parcel, selectedSeason)) || null);
     setSeasonalModalOpen(true);
   };
 
@@ -725,7 +705,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     ];
 
     const rows = filteredParcels.map((p) => {
-      const rec = p.seasonalRecords?.find((r) => r.season === selectedSeason) || p.seasonalRecords?.[0];
+      const rec = getSeasonRecord(p, selectedSeason);
       const nameParts = getFarmerNameParts(p);
       const bdayFormatted = formatBirthday(p.birthday);
       const farmLoc = getFarmLocation(p);
@@ -747,11 +727,11 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         `"${commodityPlanted}"`,
         `"${rec ? rec.seedVariety : p.breed}"`,
         `"${selectedSeason}"`,
-        `"${rec ? rec.plantingDate : p.plantingDate || '2026-07-20'}"`,
-        `"${rec ? (rec.actualHarvestDate || rec.estimatedHarvestDate) : '2026-11-15'}"`,
-        rec ? rec.actualProductionVolumeMt.toFixed(2) : ((p.weightKg || 1) * 4.8).toFixed(2),
-        rec ? rec.yieldMtPerHa.toFixed(2) : '4.80',
-        `"${rec ? rec.productionStatus : 'Standing Crop'}"`,
+        `"${rec ? rec.plantingDate : ''}"`,
+        `"${rec ? (rec.actualHarvestDate || rec.estimatedHarvestDate) : ''}"`,
+        getSelectedProduction(p)?.toFixed(2) ?? '',
+        rec && selectedSeason !== 'ALL_SEASONS' && hasActualProduction(rec) ? rec.yieldMtPerHa.toFixed(2) : '',
+        `"${rec ? rec.productionStatus : 'Not recorded'}"`,
         `"${rec ? rec.lftOfficerName : p.focalPerson}"`
       ];
     });
@@ -779,7 +759,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         <td style="padding: 6px; border: 1px solid #ccc;">${p.breed} (${p.seedType || 'INBRED'})</td>
         <td style="padding: 6px; border: 1px solid #ccc;">${p.purpose || 'Irrigated Lowland'}</td>
         <td style="padding: 6px; border: 1px solid #ccc; text-align: right; font-weight: bold;">${(p.weightKg || p.areaHa || 0).toFixed(2)} ha</td>
-        <td style="padding: 6px; border: 1px solid #ccc; text-align: right;">${((p.weightKg || 1) * 4.8).toFixed(1)} MT</td>
+        <td style="padding: 6px; border: 1px solid #ccc; text-align: right;">${displayProduction(p)}</td>
         <td style="padding: 6px; border: 1px solid #ccc; text-align: center;">${(p.boundaryCoords && p.boundaryCoords.length > 2) || (p.lat && p.lng) ? 'GPS MAPPED' : 'UNMAPPED'}</td>
       </tr>
     `
@@ -813,7 +793,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               <th>Rice Variety</th>
               <th>Agro-Ecosystem</th>
               <th>Farm Area</th>
-              <th>Est. Yield</th>
+              <th>Production (MT)</th>
               <th>GIS Status</th>
             </tr>
           </thead>
@@ -1238,7 +1218,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                   className="w-full px-3 py-1.5 rounded-xl border border-stone-300 bg-white cursor-pointer"
                 >
                   <option value="ALL_SEASONS">All Seasons</option>
-                  {CROPPING_SEASONS.map((s) => (
+                  {seasonOptions.map((s) => (
                     <option key={s} value={s}>{getShortSeasonName(s)}</option>
                   ))}
                 </select>
@@ -1409,7 +1389,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
                 {/* 8. EST. YIELD (MT) */}
                 <th className="w-24 min-w-[90px] py-2.5 px-2.5 text-right whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  YIELD (MT)
+                  PRODUCTION (MT)
                 </th>
 
                 {/* 9. AGRO-ECOSYSTEM */}
@@ -1481,22 +1461,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                   const ecoBadge = getEcosystemBadge(parcel.purpose, parcel.ecosystem);
 
                   // Extract active seasonal record for this cropping season
-                  const seasonalRecord = selectedSeason === 'ALL_SEASONS'
-                    ? parcel.seasonalRecords?.[0]
-                    : (parcel.seasonalRecords?.find((r) => matchesSeasonFilter(r.season, selectedSeason) || matchesSeasonFilter(r.seasonName, selectedSeason)) || parcel.seasonalRecords?.[0]);
+                  const seasonalRecord = getSeasonRecord(parcel, selectedSeason);
 
-                  const activeVariety = seasonalRecord ? (seasonalRecord.varietyPlanted || seasonalRecord.seedVariety) : parcel.breed;
-
-                  const parcelTotalBags = (parcel.seasonalRecords || []).reduce(
-                    (sum, r) => sum + (r.yieldBags ?? r.actualProductionBags ?? Math.round((r.actualProductionVolumeMt || 0) * 20)),
-                    0
-                  );
-                  const parcelTotalMt = (parcel.seasonalRecords || []).reduce(
-                    (sum, r) => sum + (r.actualProductionVolumeMt || r.yieldMetricTons || 0),
-                    0
-                  );
-                  const latestHarvestRecord = (parcel.seasonalRecords || [])[0];
-                  const latestHarvestDate = latestHarvestRecord?.harvestDate || latestHarvestRecord?.actualHarvestDate || latestHarvestRecord?.estimatedHarvestDate || '';
+                  const activeVariety = seasonalRecord?.seedVariety || (matchesSeasonFilter(parcel.croppingSeason || parcel.season, selectedSeason) ? parcel.breed : '—');
 
                   if (isEditing && inlineEditData) {
                     return (
@@ -1627,7 +1594,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
                         {/* 8. EST. YIELD (MT) */}
                         <td className="w-24 min-w-[90px] py-2 px-2 text-right whitespace-nowrap border-r border-amber-300 font-mono text-xs text-gov-ink">
-                          {((inlineEditData.weightKg || 1) * 4.8).toFixed(2)} MT
+                          {displayProduction(parcel)}
                         </td>
 
                         {/* 9. AGRO-ECOSYSTEM */}
@@ -1792,11 +1759,11 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                       {/* 5. RICE VARIETY */}
                       <td className="w-44 min-w-[160px] py-2 px-3 whitespace-nowrap border-r border-stone-200">
                         <div className="flex flex-col">
-                          <span className="font-semibold text-gov-ink text-xs truncate max-w-[150px]" title={activeVariety || 'NSIC Rc 222'}>
-                            {activeVariety || 'NSIC Rc 222'}
+                          <span className="font-semibold text-gov-ink text-xs truncate max-w-[150px]" title={activeVariety}>
+                            {activeVariety || '—'}
                           </span>
                           <span className="text-[10px] text-gov-muted font-normal">
-                            {parcel.seedType || 'Inbred'}
+                            {seasonalRecord?.seedType || (activeVariety === '—' ? '—' : parcel.seedType || 'Unknown')}
                           </span>
                         </div>
                       </td>
@@ -1813,7 +1780,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
                       {/* 8. EST. YIELD (MT) */}
                       <td className="w-24 min-w-[90px] py-2 px-2.5 text-right whitespace-nowrap font-mono font-medium text-gov-muted text-xs tabular-nums border-r border-stone-200">
-                        {seasonalRecord ? `${(seasonalRecord.actualProductionVolumeMt || (parcel.weightKg || 1) * 4.8).toFixed(2)}` : `${((parcel.weightKg || 1) * 4.8).toFixed(2)}`} MT
+                        {displayProduction(parcel)}
                       </td>
 
                       {/* 9. AGRO-ECOSYSTEM */}
@@ -1870,10 +1837,10 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                           </button>
 
                           {/* 3. Locate on Map */}
-                          {hasGpsCoordinates && (
+                          {hasGpsCoordinates && onLocateOnMap && (
                             <button
                               type="button"
-                              onClick={() => onLocateOnMap?.(parcel)}
+                              onClick={() => onLocateOnMap(parcel)}
                               className="p-1 rounded border border-gov-line bg-white hover:bg-gov-canvas text-gov-green transition cursor-pointer"
                               title="Locate on GIS Map"
                             >
@@ -1983,6 +1950,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
           }}
           farmer={seasonalFarmer}
           existingRecord={seasonalRecordToEdit}
+          defaultSeason={selectedSeason === 'ALL_SEASONS' ? activeSeason : selectedSeason}
         />
       )}
 
@@ -2167,7 +2135,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                 Season / category
                 <select value={certificateSeasonScope} onChange={(e) => setCertificateSeasonScope(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold normal-case tracking-normal text-slate-800">
                   <option value="ALL_SEASONS">All records</option>
-                  {CROPPING_SEASONS.map((season) => <option key={season} value={season}>{getShortSeasonName(season)}</option>)}
+                  {seasonOptions.map((season) => <option key={season} value={season}>{getShortSeasonName(season)}</option>)}
                 </select>
               </label>
               <label className="space-y-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
@@ -2440,7 +2408,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                       <th className="p-2 border-r border-slate-300">Barangay</th>
                       <th className="p-2 border-r border-slate-300">Variety / Ecosystem</th>
                       <th className="p-2 border-r border-slate-300 text-right">Area (ha)</th>
-                      <th className="p-2 border-r border-slate-300 text-right">Est. Yield</th>
+                      <th className="p-2 border-r border-slate-300 text-right">Production (MT)</th>
                       <th className="p-2 text-center">Status</th>
                     </tr>
                   </thead>
@@ -2455,7 +2423,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                         <td className="p-2 border-r border-slate-300">Brgy. {p.barangay}</td>
                         <td className="p-2 border-r border-slate-300">{p.breed} • {p.purpose}</td>
                         <td className="p-2 border-r border-slate-300 text-right font-mono font-bold">{(p.weightKg || p.areaHa || 0).toFixed(2)} ha</td>
-                        <td className="p-2 border-r border-slate-300 text-right font-mono">{((p.weightKg || 1) * 4.8).toFixed(1)} MT</td>
+                        <td className="p-2 border-r border-slate-300 text-right font-mono">{displayProduction(p)}</td>
                         <td className="p-2 text-center font-bold text-[10px]">
                           <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
                             {p.syncStatus || 'Live Synced'}

@@ -28,9 +28,7 @@ import { UnifiedSidebarNav } from './components/UnifiedSidebarNav';
 import { RiceSsistantChat } from './components/RiceSsistantChat';
 import { SafeImage } from './components/SafeImage';
 import { supabase } from './supabase';
-import { isAccountActive } from './types';
 import {
-  hasActiveSessionUser,
   clearSessionUserKeys,
   clearSessionActiveTab,
   clearLegacyLocalAuthStorage
@@ -57,6 +55,8 @@ import {
   Shield
 } from 'lucide-react';
 
+const PUBLIC_PORTAL_TABS: PortalTab[] = ['eartags', 'reports', 'evaluation', 'legal_decrees'];
+
 const AppContent: React.FC = () => {
   const {
     currentUser,
@@ -75,7 +75,6 @@ const AppContent: React.FC = () => {
     bgActive,
     adminProfile,
     municipalBranding,
-    lftAccounts,
     setSettingsActiveSubTab,
     permissions,
     realtimeStatus,
@@ -95,17 +94,7 @@ const AppContent: React.FC = () => {
   // Role permissions check
   const isCentralAdmin = currentUser?.role === 'Central Admin';
 
-  // Primary view: landing page or portal (session-scoped; new Chrome/tab starts at landing & requires login)
-  const [viewMode, setViewMode] = useState<'landing' | 'portal'>(() => {
-    return hasActiveSessionUser() || Boolean(currentUser) ? 'portal' : 'landing';
-  });
-
-  // Keep viewMode synced with user session
-  useEffect(() => {
-    if (currentUser) {
-      setViewMode('portal');
-    }
-  }, [currentUser]);
+  const [viewMode, setViewMode] = useState<'landing' | 'portal'>('landing');
 
   useEffect(() => {
     if (activeTab === 'photos') {
@@ -115,6 +104,18 @@ const AppContent: React.FC = () => {
   }, [activeTab, isCentralAdmin, setActiveTab, setSettingsActiveSubTab]);
 
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const openMapAfterLogin = useRef(false);
+  useEffect(() => {
+    if (currentUser) {
+      setViewMode('portal');
+      setIsLoginModalOpen(false);
+      if (openMapAfterLogin.current) {
+        openMapAfterLogin.current = false;
+        setActiveTab('map');
+      }
+    }
+  }, [currentUser, setActiveTab]);
+
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Modal states
@@ -169,18 +170,12 @@ const AppContent: React.FC = () => {
         const routeTabs: Record<string, PortalTab> = {
           '/asf_ordinance': 'legal_decrees', '/barangays': 'barangays', '/account': 'account',
           '/admin/registry-form-customization': 'registry_form', '/admin/user-accounts': 'accounts',
-          '/gis-measure': 'gis_measure', '/subsidies': 'subsidies'
+          '/gis-measure': 'gis_measure', '/subsidies': 'subsidies',
+          '/map': 'map', '/dashboard': 'dashboard', '/lft_dashboard': 'lft_dashboard',
+          '/brgy_dashboard': 'brgy_dashboard'
         };
         const routeTab = routeTabs[url.pathname.replace(/\/$/, '')];
-        const publicAllowedTabs: PortalTab[] = ['map', 'eartags', 'reports', 'evaluation', 'legal_decrees'];
-        const authRequiredTabs: PortalTab[] = [
-          'dashboard', 'lft_dashboard', 'brgy_dashboard', 'gis_measure', 'subsidies',
-          'accounts', 'photos', 'settings', 'barangays', 'account', 'registry_form'
-        ];
         const sanitizeDeepLink = (target: PortalTab): PortalTab => {
-          if (!currentUser && !publicAllowedTabs.includes(target)) {
-            return 'map';
-          }
           if (currentUser && currentUser.role !== 'Central Admin' && ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure'].includes(target)) {
             return 'lft_dashboard';
           }
@@ -188,7 +183,8 @@ const AppContent: React.FC = () => {
         };
 
         if (routeTab) {
-          if (!currentUser && authRequiredTabs.includes(routeTab)) {
+          if (!currentUser && !PUBLIC_PORTAL_TABS.includes(routeTab)) {
+            openMapAfterLogin.current = routeTab === 'map';
             setIsLoginModalOpen(true);
             setViewMode('landing');
             window.history.replaceState({}, document.title, '/');
@@ -204,7 +200,8 @@ const AppContent: React.FC = () => {
           setActiveTab('evaluation');
           setViewMode('portal');
         } else if (tabParam && ['dashboard', 'lft_dashboard', 'brgy_dashboard', 'map', 'gis_measure', 'eartags', 'subsidies', 'reports', 'accounts', 'photos', 'settings', 'legal_decrees', 'barangays', 'account', 'registry_form'].includes(tabParam)) {
-          if (!currentUser && authRequiredTabs.includes(tabParam as PortalTab)) {
+          if (!currentUser && !PUBLIC_PORTAL_TABS.includes(tabParam as PortalTab)) {
+            openMapAfterLogin.current = tabParam === 'map';
             setIsLoginModalOpen(true);
             setViewMode('landing');
             url.searchParams.delete('tab');
@@ -229,68 +226,6 @@ const AppContent: React.FC = () => {
     }
   }, []);
 
-  // Listen for Supabase OAuth return or existing verified session
-  useEffect(() => {
-    const checkSupabaseAuth = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user?.email && !currentUser) {
-          const userEmail = session.user.email.trim().toLowerCase();
-          const registeredAdminEmail = (adminProfile?.email || 'admin@gmail.com').trim().toLowerCase();
-          const isAdmin = Boolean(registeredAdminEmail && userEmail === registeredAdminEmail);
-
-          const matchedLft = lftAccounts.find((acc) => {
-            const em = (acc.email || '').trim().toLowerCase();
-            return Boolean(em && em === userEmail);
-          });
-
-          if (isAdmin) {
-            const adminUser: User = {
-              username: 'admin.google',
-              role: 'Central Admin',
-              name: adminProfile.name || session.user.user_metadata?.full_name || 'Administrator',
-              title: adminProfile.title || 'Municipal Agriculture Administrator',
-              email: userEmail,
-              contactNumber: adminProfile.contactNumber || '',
-              office: adminProfile.office || 'Silago Municipal Agriculture Office (DA-MAO)',
-              photoUrl: session.user.user_metadata?.avatar_url || adminProfile.photoUrl || ''
-            };
-            setCurrentUser(adminUser);
-            setViewMode('portal');
-            setActiveTab('dashboard');
-          } else if (matchedLft && isAccountActive(matchedLft.status)) {
-            const assignedBrgys =
-              matchedLft.assignedBarangays && matchedLft.assignedBarangays.length > 0
-                ? matchedLft.assignedBarangays
-                : matchedLft.barangay.split(',').map((s) => s.trim()).filter(Boolean);
-
-            const lftUser: User = {
-              username: matchedLft.username,
-              role: 'Barangay Focal Person',
-              name: matchedLft.name,
-              barangay: matchedLft.barangay,
-              assignedBarangays: assignedBrgys,
-              title: 'Local Farmer Technician (LFT)',
-              contactNumber: matchedLft.contactNumber,
-              email: matchedLft.email || userEmail,
-              photoUrl: session.user.user_metadata?.avatar_url || matchedLft.photoUrl
-            };
-            setCurrentUser(lftUser);
-            setViewMode('portal');
-            setActiveTab('lft_dashboard');
-          } else {
-            // Unregistered Google email: reject & clear session so unauthorized users cannot enter staff portal
-            await supabase.auth.signOut().catch(() => {});
-          }
-        }
-      } catch (err) {
-        console.warn('OAuth session check notice:', err);
-      }
-    };
-
-    checkSupabaseAuth();
-  }, [adminProfile, lftAccounts, currentUser]);
-
   // Trigger upon initial authenticated mount or Central Admin init
   useEffect(() => {
     if (currentUser && !hasTriggeredInitialToastRef.current) {
@@ -308,9 +243,8 @@ const AppContent: React.FC = () => {
   // Enforce strict role-based & authentication route boundaries across all tabs
   useEffect(() => {
     if (!currentUser) {
-      const publicAllowedTabs: PortalTab[] = ['map', 'eartags', 'reports', 'evaluation', 'legal_decrees'];
-      if (!publicAllowedTabs.includes(activeTab)) {
-        setActiveTab('map');
+      if (!PUBLIC_PORTAL_TABS.includes(activeTab)) {
+        setActiveTab('eartags');
       }
       return;
     }
@@ -324,8 +258,9 @@ const AppContent: React.FC = () => {
   const handleOpenLogin = () => setIsLoginModalOpen(true);
 
   const handleLoginSuccess = (user?: User) => {
-    setViewMode('portal');
     const active = user || currentUser;
+    if (!active) return;
+    setViewMode('portal');
     if (active?.role !== 'Central Admin') {
       setActiveTab('lft_dashboard');
     } else {
@@ -341,11 +276,6 @@ const AppContent: React.FC = () => {
   };
 
   const handleSignOut = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch (e) {
-      console.warn('Sign out notice:', e);
-    }
     setCurrentUser(null);
     clearSessionUserKeys();
     clearSessionActiveTab();
@@ -358,6 +288,11 @@ const AppContent: React.FC = () => {
       }
     } catch {}
     setViewMode('landing');
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn('Sign out notice:', e);
+    }
   };
 
   const handleNavigateToPortalTab = (
@@ -365,9 +300,8 @@ const AppContent: React.FC = () => {
     subTab?: 'profile' | 'municipal' | 'featured_card' | 'display' | 'media' | 'landing'
   ) => {
     const adminOnlyTabs: PortalTab[] = ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure'];
-    const authRequiredTabs: PortalTab[] = [...adminOnlyTabs, 'barangays', 'subsidies', 'settings', 'account', 'lft_dashboard', 'brgy_dashboard'];
-
-    if (!currentUser && authRequiredTabs.includes(tab)) {
+    if (!currentUser && !PUBLIC_PORTAL_TABS.includes(tab)) {
+      openMapAfterLogin.current = tab === 'map';
       setIsLoginModalOpen(true);
       return;
     }
@@ -953,7 +887,7 @@ const AppContent: React.FC = () => {
                 />
               )}
 
-              {!currentUser && !['map', 'eartags', 'reports', 'evaluation', 'legal_decrees'].includes(activeTab) && (
+              {!currentUser && !PUBLIC_PORTAL_TABS.includes(activeTab) && (
                 <div className="max-w-lg mx-auto my-12 bg-white border border-slate-300 rounded-md p-6 text-center space-y-4">
                   <div className="w-10 h-10 rounded-md bg-slate-100 border border-slate-300 text-emerald-800 flex items-center justify-center mx-auto">
                     <LayoutDashboard className="w-5 h-5" />
@@ -961,7 +895,7 @@ const AppContent: React.FC = () => {
                   <div className="space-y-1">
                     <h2 className="text-base font-bold text-slate-900">Sign In Required</h2>
                     <p className="text-xs text-slate-600 leading-relaxed">
-                      Authorized Municipal Agriculture Office or LFT credentials are required to access the Dashboard.
+                      Authorized Municipal Agriculture Office or LFT credentials are required to access this page.
                     </p>
                   </div>
                   <div className="flex items-center justify-center gap-2.5 pt-1">
@@ -972,18 +906,11 @@ const AppContent: React.FC = () => {
                     >
                       Sign In to Portal
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('map')}
-                      className="px-4 py-2 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition cursor-pointer"
-                    >
-                      Open GIS Rice Map
-                    </button>
                   </div>
                 </div>
               )}
 
-              {activeTab === 'map' && (
+              {activeTab === 'map' && currentUser && (
                 <MapView
                   onSelectParcel={(p) => setSelectedParcel(p)}
                   onOpenAddParcelWithCoords={(coords) => {
@@ -1022,11 +949,10 @@ const AppContent: React.FC = () => {
                     if (b) setReportBarangayFilter(b);
                     setActiveTab('reports');
                   }}
-                  onLocateOnMap={(p) => {
+                  onLocateOnMap={currentUser ? (p) => {
                     setFocusParcelForMap(p);
-                    setActiveTab('map');
-                    setViewMode('portal');
-                  }}
+                    handleNavigateToPortalTab('map');
+                  } : undefined}
                 />
               )}
 
@@ -1109,8 +1035,7 @@ const AppContent: React.FC = () => {
         onSelectParcel={(p) => setSelectedParcel(p)}
         onViewOnMap={(b) => {
           setFocusBarangayForMap(b);
-          setActiveTab('map');
-          setViewMode('portal');
+          handleNavigateToPortalTab('map');
         }}
       />
 
@@ -1192,8 +1117,7 @@ const AppContent: React.FC = () => {
         }}
         onLocateParcelOnMap={(parcel) => {
           setFocusParcelForMap(parcel);
-          setActiveTab('map');
-          setViewMode('portal');
+          handleNavigateToPortalTab('map');
         }}
         onFilterRecords={(term) => {
           setDatabaseSearchFilter(term);
@@ -1212,8 +1136,7 @@ const AppContent: React.FC = () => {
           if (matched) {
             setFocusBarangayForMap(matched);
           }
-          setActiveTab('map');
-          setViewMode('portal');
+          handleNavigateToPortalTab('map');
         }}
       />
     </div>

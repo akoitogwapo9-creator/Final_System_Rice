@@ -60,12 +60,14 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
           },
         ]
       : []),
-    {
-      id: 'map',
-      tab: 'map' as PortalTab,
-      label: 'GIS Rice Map',
-      icon: Compass,
-    },
+    ...(isAuthenticated ? [
+      {
+        id: 'map',
+        tab: 'map' as PortalTab,
+        label: 'GIS Rice Map',
+        icon: Compass,
+      }
+    ] : []),
     {
       id: 'eartags',
       tab: 'eartags' as PortalTab,

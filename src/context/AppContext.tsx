@@ -3,8 +3,8 @@ import { User, FarmParcel, Language, BackgroundPreset, LftAccount, SeasonalProdu
 import { BARANGAYS, getAssignedLftForBarangay, isUserAuthorizedForBarangay } from '../data/barangays';
 import { DEFAULT_BG_PHOTO, DEFAULT_SLSU_PHOTO, SLSU_DEFAULTS, PRESET_BACKGROUNDS } from '../data/photos';
 import { DEFAULT_SUBSIDY_PROGRAMS } from '../data/subsidies';
-import { RiceVariety, RICE_VARIETIES } from '../data/riceVarieties';
-import { generateInitialSeasonalRecords, normalizeSeasonalRecord, CROPPING_SEASONS, ACTIVE_SEASON } from '../data/seasonalProduction';
+import { RiceVariety, RICE_VARIETIES, mergeRequiredRiceVarieties } from '../data/riceVarieties';
+import { normalizeSeasonalRecord, getSeasonIdentity, getSeasonOptions, matchesSeasonFilter, seasonOrder, CROPPING_SEASONS, ACTIVE_SEASON } from '../data/seasonalProduction';
 import { supabase } from '../supabase';
 import {
   mapFarmerRowToParcel,
@@ -38,8 +38,7 @@ import {
 import { setReportCustomLogoCache } from '../utils/reportExportUtils';
 import { getTranslation } from '../locales/translations';
 import {
-  readSessionUser,
-  writeSessionUser,
+  clearSessionUserKeys,
   readSessionActiveTab,
   writeSessionActiveTab
 } from '../utils/sessionAuth';
@@ -72,7 +71,6 @@ export const DEFAULT_LANDING_PAGE_CONFIG: LandingPageConfig = {
   heroReturnBtnText: 'Return to Executive Dashboard',
   heroReturnLftBtnText: 'Return to LFT Field Portal',
   heroSignInBtnText: 'Sign In as Central Admin',
-  heroGisBtnText: 'Explore GIS Map',
 
   // Hero Section Background Customization
   heroBgColor: '#123b2b',
@@ -182,11 +180,7 @@ const DEFAULT_TENURES = [
   'Leaseholder'
 ];
 
-const DEFAULT_SEASONS = [
-  'Wet Season (WS) 2026 (June – Nov 2026)',
-  'Dry Season (DS) 2026 (Dec 2025 – May 2026)',
-  'Wet Season (WS) 2025 (June – Nov 2025)'
-];
+const DEFAULT_SEASONS = [ACTIVE_SEASON, ...CROPPING_SEASONS.filter((season) => season !== ACTIVE_SEASON)];
 
 const DEFAULT_IRRIGATION_ASSOCIATIONS = [
   'Balagawan Communal Irrigators Association (BCIA)',
@@ -446,35 +440,14 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Authentication State (persisted per browser session/tab in sessionStorage for security)
-  const [currentUser, setCurrentUserState] = useState<User | null>(() => {
-    return readSessionUser<User>();
-  });
-
-  const setCurrentUser = useCallback((userOrUpdater: User | null | ((prev: User | null) => User | null)) => {
-    setCurrentUserState((prev) => {
-      const nextUser = typeof userOrUpdater === 'function' ? userOrUpdater(prev) : userOrUpdater;
-      writeSessionUser(nextUser as Record<string, any> | null);
-      return nextUser;
-    });
-  }, []);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   // Active Navigation Tab State (persisted per session in sessionStorage & URL state)
   const [activeTab, setActiveTabState] = useState<PortalTab>(() => {
-    const publicSafeTabs: PortalTab[] = ['map', 'eartags', 'reports', 'evaluation', 'legal_decrees'];
+    const publicSafeTabs: PortalTab[] = ['eartags', 'reports', 'evaluation', 'legal_decrees'];
     const sanitizeInitialTab = (candidate: PortalTab | null): PortalTab | null => {
       if (!candidate) return null;
-      if (!currentUser && !publicSafeTabs.includes(candidate)) {
-        return 'map';
-      }
-      if (
-        currentUser &&
-        currentUser.role !== 'Central Admin' &&
-        ['dashboard', 'accounts', 'photos', 'registry_form', 'barangays', 'gis_measure'].includes(candidate)
-      ) {
-        return 'lft_dashboard';
-      }
-      return candidate;
+      return publicSafeTabs.includes(candidate) ? candidate : 'eartags';
     };
     try {
       if (typeof window !== 'undefined') {
@@ -485,8 +458,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (savedTab) return savedTab;
       }
     } catch {}
-    if (!currentUser) return 'map';
-    return currentUser.role === 'Central Admin' ? 'dashboard' : 'lft_dashboard';
+    return 'eartags';
   });
 
   const setActiveTab = useCallback((tab: PortalTab) => {
@@ -507,12 +479,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Check supabase.auth.getSession() on app initial load before declaring user unauthenticated
   useEffect(() => {
     let isMounted = true;
+    clearSessionUserKeys();
 
-    const resolveAuthorizedSessionUser = async (session: any): Promise<User | null> => {
-      if (!session?.user) return null;
-      const userEmail = (session.user.email || '').trim().toLowerCase();
-      const userPhone = (session.user.phone || '').replace(/\D/g, '');
-      const identifier = userEmail || userPhone || session.user.id;
+    const resolveAuthorizedSessionUser = async (accessToken: string): Promise<User | null> => {
+      const { data: { user }, error } = await supabase.auth.getUser(accessToken);
+      if (error || !user) return null;
+      const userEmail = (user.email || '').trim().toLowerCase();
+      const userPhone = (user.phone || '').replace(/\D/g, '');
+      const identifier = userEmail || userPhone || user.id;
       const hydrated = await supabaseDb.hydrateUserRole(identifier);
 
       if (hydrated?.role === 'Barangay Focal Person') {
@@ -523,14 +497,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           username: hydrated.username || userEmail.split('@')[0],
           role: 'Barangay Focal Person',
-          name: hydrated.name || session.user.user_metadata?.full_name || 'LFT Field Officer',
+          name: hydrated.name || user.user_metadata?.full_name || 'LFT Field Officer',
           title: hydrated.title || 'Local Farmer Technician (LFT)',
           email: userEmail || hydrated.email,
-          contactNumber: hydrated.contactNumber || session.user.phone,
+          contactNumber: hydrated.contactNumber || user.phone,
           barangay: hydrated.barangay,
           assignedBarangays: hydrated.assignedBarangays,
           status: hydrated.status,
-          photoUrl: session.user.user_metadata?.avatar_url || hydrated.photoUrl
+          photoUrl: user.user_metadata?.avatar_url || hydrated.photoUrl
         };
       }
 
@@ -546,12 +520,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           username: 'admin',
           role: 'Central Admin',
-          name: cloudProfile?.name || session.user.user_metadata?.full_name || 'Municipal Administrator',
+          name: cloudProfile?.name || user.user_metadata?.full_name || 'Municipal Administrator',
           title: cloudProfile?.title || 'Municipal Agriculture Administrator',
           email: userEmail || cloudProfile?.email,
-          contactNumber: cloudProfile?.contactNumber || session.user.phone,
+          contactNumber: cloudProfile?.contactNumber || user.phone,
           office: cloudProfile?.office || 'Silago Municipal Agriculture Office (DA-MAO)',
-          photoUrl: session.user.user_metadata?.avatar_url || cloudProfile?.photoUrl
+          photoUrl: user.user_metadata?.avatar_url || cloudProfile?.photoUrl
         };
       }
 
@@ -560,15 +534,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return null;
     };
 
+    let authChange = 0;
     const checkInitialSession = async () => {
+      const change = authChange;
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!isMounted) return;
 
         if (session?.user) {
-          const resolvedUser = await resolveAuthorizedSessionUser(session);
-          if (isMounted && resolvedUser) {
+          const resolvedUser = await resolveAuthorizedSessionUser(session.access_token);
+          if (isMounted && change === authChange && resolvedUser) {
             setCurrentUser(resolvedUser);
+            setActiveTab(resolvedUser.role === 'Central Admin' ? 'dashboard' : 'lft_dashboard');
           }
         }
       } catch (err) {
@@ -582,18 +559,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     checkInitialSession();
 
-    // Listen for auth state changes from Supabase
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    // Resolve roles after the Supabase auth callback releases its lock.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!isMounted) return;
       if (event === 'SIGNED_OUT') {
-        // Explicit sign-out handles clearing currentUser via handleSignOut.
-      } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        if (session?.user) {
-          const resolvedUser = await resolveAuthorizedSessionUser(session);
-          if (isMounted && resolvedUser) {
-            setCurrentUser(resolvedUser);
+        authChange++;
+        setCurrentUser(null);
+      } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.access_token) {
+        const change = ++authChange;
+        window.setTimeout(async () => {
+          if (!isMounted || change !== authChange) return;
+          try {
+            const resolvedUser = await resolveAuthorizedSessionUser(session.access_token);
+            if (isMounted && change === authChange) setCurrentUser(resolvedUser);
+          } catch (err) {
+            console.warn('Session verification notice:', err);
           }
-        }
+        }, 0);
       }
     });
 
@@ -601,7 +583,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isMounted = false;
       subscription?.unsubscribe();
     };
-  }, [setCurrentUser]);
+  }, [setActiveTab]);
 
   // Role-Based Permissions for Active User Session
   const permissions = useMemo(() => getUserPermissions(currentUser), [currentUser]);
@@ -638,7 +620,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            return sortParcelsAlphabetically(parsed);
+            return sortParcelsAlphabetically(parsed.map(mapFarmerRowToParcel));
           }
         }
       }
@@ -1272,17 +1254,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       raiserName: finalFarmerName
     };
 
-    const withSeasonal: FarmParcel = {
-      ...validatedParcel,
-      seasonalRecords:
-        validatedParcel.seasonalRecords && validatedParcel.seasonalRecords.length > 0
-          ? validatedParcel.seasonalRecords
-          : generateInitialSeasonalRecords(validatedParcel)
-    };
-
     // Optimistically update local parcels state and cached storage immediately
     setParcels((prev) => {
-      const updated = sortParcelsAlphabetically([withSeasonal, ...prev.filter((p) => p.tagNumber !== withSeasonal.tagNumber)]);
+      const updated = sortParcelsAlphabetically([validatedParcel, ...prev.filter((p) => p.tagNumber !== validatedParcel.tagNumber)]);
       try {
         localStorage.setItem('rice_registry_parcels', JSON.stringify(updated));
         localStorage.setItem('silago_cached_parcels', JSON.stringify(updated));
@@ -1292,7 +1266,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       // Direct Remote Supabase CRUD & Realtime Broadcast - throws on duplicate constraint / 23505
-      await supabaseDb.upsertParcel(withSeasonal);
+      await supabaseDb.upsertParcel(validatedParcel);
     } catch (err: any) {
       const isUniqueViolation =
         err?.code === '23505' ||
@@ -1303,7 +1277,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (isUniqueViolation) {
         // Rollback state and cache if unique constraint error occurred
         setParcels((prev) => {
-          const reverted = prev.filter((p) => p.tagNumber !== withSeasonal.tagNumber);
+          const reverted = prev.filter((p) => p.tagNumber !== validatedParcel.tagNumber);
           try {
             localStorage.setItem('rice_registry_parcels', JSON.stringify(reverted));
             localStorage.setItem('silago_cached_parcels', JSON.stringify(reverted));
@@ -1389,97 +1363,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {}
   };
 
-  // Master-Detail Seasonal Production Record Methods
+  // Master-detail seasonal production record methods
+  const saveSeasonalRecord = (
+    parcelTag: string,
+    fields: Partial<SeasonalProductionRecord>,
+    recordId?: string
+  ) => {
+    const parcel = parcels.find((item) => item.tagNumber === parcelTag);
+    if (!parcel || !canUserEditParcel(currentUser, parcel)) return;
+    const records = parcel.seasonalRecords || [];
+    const existing = records.find((item) =>
+      recordId ? item.id === recordId : matchesSeasonFilter(item.season, fields.season || '')
+    );
+    const record = normalizeSeasonalRecord({ ...existing, ...fields, parcelTag }, parcelTag);
+    const seasonalRecords = [record, ...records.filter((item) => item.id !== existing?.id)]
+      .sort((a, b) => seasonOrder(b.season) - seasonOrder(a.season));
+    const parcelSeason = parcel.croppingSeason || parcel.season || '';
+    const isLatest = seasonalRecords[0] === record &&
+      (!parcel.plantingDate || seasonOrder(record.season) >= seasonOrder(parcelSeason));
+    const stage = record.productionStatus === 'Harvest Completed' ? 'Harvested'
+      : record.productionStatus === 'Crop Failure / Damaged' ? 'Damaged'
+      : record.growthStage || 'Active Crop';
+    void updateParcel(parcelTag, {
+      seasonalRecords,
+      ...isLatest && {
+        breed: record.seedVariety,
+        variety: record.seedVariety,
+        seedType: record.seedType,
+        plantingDate: record.plantingDate,
+        harvestDate: record.harvestDate,
+        croppingSeason: record.season,
+        season: record.season,
+        healthStatus: stage,
+        standingCropStage: stage
+      }
+    });
+  };
+
   const addSeasonalRecord = (
     parcelTag: string,
     record: Omit<SeasonalProductionRecord, 'id' | 'parcelTag' | 'recordedAt'>
-  ) => {
-    const newRecord: SeasonalProductionRecord = normalizeSeasonalRecord({
-      ...record,
-      parcelTag
-    }, parcelTag);
-
-    let targetUpdated: FarmParcel | null = null;
-    const updated = parcels.map((p) => {
-      if (p.tagNumber === parcelTag) {
-        const existing = p.seasonalRecords || [];
-        const filtered = existing.filter((r) => r.season !== record.season && r.seasonName !== record.season);
-        targetUpdated = {
-          ...p,
-          seasonalRecords: [newRecord, ...filtered],
-          breed: newRecord.seedVariety,
-          variety: newRecord.seedVariety,
-          plantingDate: newRecord.plantingDate,
-          croppingSeason: newRecord.season,
-          targetYieldMt: newRecord.yieldMtPerHa,
-          healthStatus:
-            newRecord.growthStage ||
-            (newRecord.productionStatus === 'Harvest Completed' || newRecord.status === 'Harvested' ? 'Harvested' : 'Active Crop')
-        };
-        return targetUpdated;
-      }
-      return p;
-    });
-    setParcels(updated);
-    try {
-      localStorage.setItem('rice_registry_parcels', JSON.stringify(updated));
-      localStorage.setItem('silago_cached_parcels', JSON.stringify(updated));
-    } catch {}
-    if (targetUpdated) {
-      supabaseDb.upsertParcel(targetUpdated);
-    }
-  };
+  ) => saveSeasonalRecord(parcelTag, record);
 
   const updateSeasonalRecord = (
     parcelTag: string,
     recordId: string,
     updatedFields: Partial<SeasonalProductionRecord>
-  ) => {
-    let targetUpdated: FarmParcel | null = null;
-    const updated = parcels.map((p) => {
-      if (p.tagNumber === parcelTag) {
-        const existing = p.seasonalRecords || [];
-        const newRecords = existing.map((r) =>
-          r.id === recordId ? normalizeSeasonalRecord({ ...r, ...updatedFields, parcelTag }, parcelTag) : r
-        );
-        targetUpdated = {
-          ...p,
-          seasonalRecords: newRecords
-        };
-        return targetUpdated;
-      }
-      return p;
-    });
-    setParcels(updated);
-    try {
-      localStorage.setItem('rice_registry_parcels', JSON.stringify(updated));
-      localStorage.setItem('silago_cached_parcels', JSON.stringify(updated));
-    } catch {}
-    if (targetUpdated) {
-      supabaseDb.upsertParcel(targetUpdated);
-    }
-  };
+  ) => saveSeasonalRecord(parcelTag, updatedFields, recordId);
 
   const deleteSeasonalRecord = (parcelTag: string, recordId: string) => {
-    let targetUpdated: FarmParcel | null = null;
-    const updated = parcels.map((p) => {
-      if (p.tagNumber === parcelTag) {
-        targetUpdated = {
-          ...p,
-          seasonalRecords: (p.seasonalRecords || []).filter((r) => r.id !== recordId)
-        };
-        return targetUpdated;
-      }
-      return p;
+    const parcel = parcels.find((item) => item.tagNumber === parcelTag);
+    if (!parcel || !canUserEditParcel(currentUser, parcel)) return;
+    void updateParcel(parcelTag, {
+      seasonalRecords: (parcel.seasonalRecords || []).filter((record) => record.id !== recordId)
     });
-    setParcels(updated);
-    try {
-      localStorage.setItem('rice_registry_parcels', JSON.stringify(updated));
-      localStorage.setItem('silago_cached_parcels', JSON.stringify(updated));
-    } catch {}
-    if (targetUpdated) {
-      supabaseDb.upsertParcel(targetUpdated);
-    }
   };
 
   const addLftAccount = (accountData: Omit<LftAccount, 'id'>) => {
@@ -2490,8 +2427,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [varieties, setVarieties] = useState<RiceVariety[]>(RICE_VARIETIES);
 
   const saveVarieties = (newVarieties: RiceVariety[]) => {
-    setVarieties(newVarieties);
-    supabaseDb.setSetting('silago_rice_varieties', newVarieties);
+    const updated = mergeRequiredRiceVarieties(newVarieties);
+    setVarieties(updated);
+    supabaseDb.setSetting('silago_rice_varieties', updated);
   };
 
   const addVariety = (variety: RiceVariety) => {
@@ -2567,14 +2505,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addSeason = (name: string) => {
     const trimmed = name.trim();
-    if (!trimmed || seasons.includes(trimmed)) return;
-    saveSeasons([...seasons, trimmed]);
+    if (!getSeasonIdentity(trimmed) || seasons.some((season) => matchesSeasonFilter(season, trimmed))) return;
+    saveSeasons(getSeasonOptions([...seasons, trimmed]));
   };
 
   const updateSeason = (oldName: string, newName: string) => {
     const trimmed = newName.trim();
-    if (!trimmed) return;
-    saveSeasons(seasons.map((s) => (s === oldName ? trimmed : s)));
+    if (!getSeasonIdentity(trimmed) || seasons.some((season) => season !== oldName && matchesSeasonFilter(season, trimmed))) return;
+    saveSeasons(getSeasonOptions(seasons.map((season) => season === oldName ? trimmed : season)));
   };
 
   const deleteSeason = (name: string) => {
@@ -2704,10 +2642,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (cloudAdminProfile) setAdminProfile(cloudAdminProfile);
         if (cloudAdminPass) setAdminPasswordCache(cloudAdminPass);
         if (cloudOfficeContact) setOfficeContactInfoState(cloudOfficeContact);
-        if (Array.isArray(cloudVarieties) && cloudVarieties.length > 0) setVarieties(cloudVarieties);
+        if (Array.isArray(cloudVarieties) && cloudVarieties.length > 0) setVarieties(mergeRequiredRiceVarieties(cloudVarieties));
         if (Array.isArray(cloudEcosystems) && cloudEcosystems.length > 0) setEcosystems(cloudEcosystems);
         if (Array.isArray(cloudTenures) && cloudTenures.length > 0) setTenures(cloudTenures);
-        if (Array.isArray(cloudSeasons) && cloudSeasons.length > 0) setSeasons(cloudSeasons);
+        if (Array.isArray(cloudSeasons) && cloudSeasons.length > 0) setSeasons([...new Set([ACTIVE_SEASON, ...getSeasonOptions(cloudSeasons)])]);
         if (Array.isArray(cloudIAs) && cloudIAs.length > 0) setIrrigationAssociations(cloudIAs);
         if (cloudSlsuPhoto) setSlsuPhotoUrlState(cloudSlsuPhoto);
         if (cloudSlsuLayout) setSlsuLayoutModeState(cloudSlsuLayout);

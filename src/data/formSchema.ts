@@ -146,6 +146,19 @@ export const DEFAULT_FORM_FIELDS: RegistryField[] = [
     helpText: 'Optional middle name'
   },
   {
+    id: 'reg-suffix',
+    section: '1. Farmer & RSBSA Profile',
+    formTarget: 'registration',
+    name: 'Suffix',
+    fieldType: 'Text Field',
+    required: false,
+    visible: true,
+    isCore: true,
+    valueBehavior: 'editable',
+    placeholder: 'None',
+    helpText: 'Optional name suffix, such as Jr., Sr., II, III, or IV'
+  },
+  {
     id: 'reg-birthday',
     section: '1. Farmer & RSBSA Profile',
     formTarget: 'registration',
@@ -400,7 +413,13 @@ export function loadFormSchema(): PersistedFormSchema {
       Array.isArray(parsed?.fields) && parsed.fields.length > 0
         ? parsed.fields
         : DEFAULT_FORM_FIELDS;
-    return { sections: validSections, fields: validFields };
+    const suffixField = DEFAULT_FORM_FIELDS.find((field) => field.id === 'reg-suffix')!;
+    return {
+      sections: validSections,
+      fields: validFields.some((field) => field.id === suffixField.id)
+        ? validFields
+        : [...validFields, suffixField]
+    };
   } catch {
     return { sections: DEFAULT_FORM_SECTIONS, fields: DEFAULT_FORM_FIELDS };
   }

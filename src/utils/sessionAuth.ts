@@ -1,10 +1,8 @@
 /**
  * Session-scoped authentication storage helpers.
  *
- * Keeps authenticated staff/admin sessions in browser `sessionStorage` with a
- * per-tab Supabase storageKey so that closing Chrome or opening a new Chrome
- * window/tab always returns to an unauthenticated login prompt for security,
- * while still preserving same-tab page refreshes and OAuth redirects.
+ * Supabase tokens use a per-tab storage key for OAuth redirects and refreshes.
+ * Legacy browser-stored user profiles are cleared and never used for authentication.
  */
 
 export const AUTH_SESSION_KEYS = [
@@ -74,53 +72,6 @@ export function clearSessionUserKeys(): void {
   } catch {
     // Ignore storage access errors
   }
-}
-
-export function readSessionUser<T extends { username?: string }>(): T | null {
-  if (typeof window === 'undefined') return null;
-  clearLegacyLocalAuthStorage();
-  try {
-    let raw: string | null = null;
-    for (const key of AUTH_SESSION_KEYS) {
-      raw = window.sessionStorage.getItem(key);
-      if (raw) break;
-    }
-    if (!raw) return null;
-
-    const savedUser = JSON.parse(raw) as T;
-    if (
-      savedUser?.username === 'temp_admin' ||
-      savedUser?.username === 'temp_lft' ||
-      (savedUser?.username === 'silago.test' && !import.meta.env.DEV)
-    ) {
-      clearSessionUserKeys();
-      return null;
-    }
-    return savedUser;
-  } catch {
-    return null;
-  }
-}
-
-export function writeSessionUser(user: Record<string, any> | null): void {
-  if (typeof window === 'undefined') return;
-  clearLegacyLocalAuthStorage();
-  try {
-    if (user) {
-      const safeUser = { ...user };
-      delete safeUser.password;
-      const serialized = JSON.stringify(safeUser);
-      AUTH_SESSION_KEYS.forEach((key) => window.sessionStorage.setItem(key, serialized));
-    } else {
-      clearSessionUserKeys();
-    }
-  } catch {
-    // Ignore storage access errors
-  }
-}
-
-export function hasActiveSessionUser(): boolean {
-  return readSessionUser() !== null;
 }
 
 export function readSessionActiveTab(): string | null {

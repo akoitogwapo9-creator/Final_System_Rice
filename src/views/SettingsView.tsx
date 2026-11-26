@@ -1781,16 +1781,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
                       placeholder="Sign In as Central Admin"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-600 text-[11px]">Explore GIS Map Button</label>
-                    <input
-                      type="text"
-                      value={landingForm.heroGisBtnText}
-                      onChange={(e) => setLandingForm({ ...landingForm, heroGisBtnText: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="Explore GIS Map"
-                    />
-                  </div>
                 </div>
               </div>
             </div>
