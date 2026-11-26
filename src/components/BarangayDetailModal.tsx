@@ -1,5 +1,5 @@
 import { useApp } from '../context/AppContext';
-import { BarangayClassification, getBarangayLabel, getBarangayZone, matchBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
+import { BARANGAY_CLASSIFICATIONS, getBarangayLabel, getBarangayZone, matchBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
 import React, { useState, useEffect } from 'react';
 import { Barangay, FarmParcel } from '../types';
 import { X, MapPin, User, Phone, Wheat, Droplets, Compass, Layers, ChevronRight, Pencil, Save, RotateCcw, Check } from 'lucide-react';
@@ -39,7 +39,7 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
   const [editing, setIsEditing] = useState(false);
   const isEditing = editing && mayEdit;
   const [draftName, setDraftName] = useState('');
-  const [draftClassification, setDraftClassification] = useState<BarangayClassification>('Coastal');
+  const [draftClassification, setDraftClassification] = useState('Coastal');
   const [saveNotice, setSaveNotice] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -95,7 +95,7 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
   };
 
   const handleSave = async () => {
-    if (!mayEdit || saving || !draftName.trim()) return;
+    if (!mayEdit || saving || !draftName.trim() || !draftClassification.trim()) return;
     const displayName = draftName.trim();
     if (OFFICIAL_15_BARANGAYS.some((name) =>
       name !== barangay.name && getBarangayLabel(name, barangayProfiles).toLowerCase() === displayName.toLowerCase()
@@ -295,15 +295,18 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
                 />
               </label>
               <label className="space-y-1 text-xs font-semibold text-slate-700">
-                <span>Classification</span>
-                <select
+                <span>Barangay Classification / Zone</span>
+                <input
+                  list="barangay-classification-options"
                   value={draftClassification}
-                  onChange={(event) => setDraftClassification(event.target.value as BarangayClassification)}
-                  className={selectClass}
-                >
-                  <option value="Coastal">Coastal</option>
-                  <option value="Upland">Upland</option>
-                </select>
+                  onChange={(event) => setDraftClassification(event.target.value)}
+                  className={inputClass}
+                  required
+                  maxLength={60}
+                />
+                <datalist id="barangay-classification-options">
+                  {BARANGAY_CLASSIFICATIONS.map((zone) => <option key={zone} value={zone} />)}
+                </datalist>
               </label>
               <div className="space-y-1">
                 <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">
@@ -519,7 +522,7 @@ export const BarangayDetailModal: React.FC<BarangayDetailModalProps> = ({
               </button>
               <button
                 type="button"
-                disabled={saving || !draftName.trim()}
+                disabled={saving || !draftName.trim() || !draftClassification.trim()}
                   onClick={handleSave}
                 className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-sm"
               >

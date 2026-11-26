@@ -8,12 +8,11 @@ import {
   getBarangayLabel,
   getUserAssignedBarangays,
   isUserAuthorizedForBarangay,
-  getAssignedLftForBarangay
 } from '../data/barangays';
-import { getParcelSeasonOptions, getSeasonRecord, hasActualProduction, ACTIVE_SEASON, matchesSeasonFilter, getShortSeasonName } from '../data/seasonalProduction';
+import { getParcelSeasonOptions, getRecordedCropValue, getSeasonRecord, hasActualProduction, matchesSeasonFilter, getShortSeasonName } from '../data/seasonalProduction';
 import { FarmParcel, SeasonalProductionRecord } from '../types';
 import { getLandPhoto, getFarmerPhoto } from '../data/photos';
-import { calculateCropGrowthStage, RICE_VARIETIES } from '../data/riceVarieties';
+import { calculateCropGrowthStage } from '../data/riceVarieties';
 import { SeasonalProductionModal } from '../components/SeasonalProductionModal';
 import { PhotoPreviewModal } from '../components/PhotoPreviewModal';
 import { SafeImage } from '../components/SafeImage';
@@ -114,7 +113,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     }
   }, [initialSearchQuery]);
   const [selectedBarangay, setSelectedBarangay] = useState<string>('ALL');
-  const [selectedSeason, setSelectedSeason] = useState<string>(activeSeason || ACTIVE_SEASON);
+  const [selectedSeason, setSelectedSeason] = useState<string>('ALL_SEASONS');
   const [selectedEcosystem, setSelectedEcosystem] = useState<string>('ALL');
   const [selectedVariety, setSelectedVariety] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<'date' | 'area' | 'tag' | 'farmer' | 'barangay'>('farmer');
@@ -173,12 +172,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     residentialAddress: string;
     birthday: string;
     farmLocation: string;
-    purpose?: string;
     lat: number;
     lng: number;
     weightKg: number;
-    commodity: string;
-    breed: string;
   } | null>(null);
 
   // Certificate Modal state
@@ -276,7 +272,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       };
     }
     return {
-      label: purpose || 'Lowland Rice',
+      label: getRecordedCropValue(purpose || eco) || 'N/A',
       badgeClass: 'bg-slate-50 text-slate-700 border-slate-200'
     };
   };
@@ -409,7 +405,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       const currentRecord = selectedSeason === 'ALL_SEASONS'
         ? p.seasonalRecords?.[0]
         : p.seasonalRecords?.find((r) => matchesSeasonFilter(r.season, selectedSeason) || matchesSeasonFilter(r.seasonName, selectedSeason));
-      const activeBreed = currentRecord?.seedVariety || (matchesSeasonFilter(p.croppingSeason || p.season, selectedSeason) ? p.breed : '');
+      const activeBreed = getRecordedCropValue(currentRecord?.seedVariety ?? (matchesSeasonFilter(p.croppingSeason || p.season, selectedSeason) ? p.breed : ''));
 
       const matchesVariety =
         selectedVariety === 'ALL' ||
@@ -522,7 +518,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   };
   const displayProduction = (parcel: FarmParcel) => {
     const volume = getSelectedProduction(parcel);
-    return volume === undefined ? '—' : `${volume.toFixed(2)} MT`;
+    return volume === undefined ? 'N/A' : `${volume.toFixed(2)} MT`;
   };
 
   const handleStartInlineEdit = (e: React.MouseEvent, parcel: FarmParcel) => {
@@ -551,12 +547,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       residentialAddress: parcel.residential_address || parcel.address || (parcel.purok ? `Purok ${parcel.purok}, Brgy. ${parcel.barangay}, Silago` : `Brgy. ${parcel.barangay}, Silago`),
       birthday: parcel.birthday ? formatBirthday(parcel.birthday) : '',
       farmLocation: parcel.farmLocation || getFarmLocation(parcel),
-      purpose: parcel.purpose || 'Irrigated Lowland (NIA)',
       lat: parcel.lat || 10.5312,
       lng: parcel.lng || 125.1643,
       weightKg: parcel.weightKg || 0,
-      commodity: parcel.commodity || 'Rice',
-      breed: parcel.breed || 'NSIC Rc 222'
     });
   };
 
@@ -610,12 +603,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       address: inlineEditData.residentialAddress,
       birthday: inlineEditData.birthday,
       farmLocation: inlineEditData.farmLocation,
-      purpose: inlineEditData.purpose || 'Irrigated Lowland (NIA)',
       lat: Number(inlineEditData.lat) || 0,
       lng: Number(inlineEditData.lng) || 0,
       weightKg: Number(inlineEditData.weightKg) || 0,
-      commodity: inlineEditData.commodity,
-      breed: inlineEditData.breed,
       photoUrl: inlineEditData.photoUrl,
       farmerPhotoUrl: inlineEditData.photoUrl,
       fieldPhotoUrl: inlineEditData.fieldPhotoUrl,
@@ -707,8 +697,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       'HARVEST DATE',
       'PRODUCTION (MT)',
       'YIELD (MT/HA)',
-      'STATUS',
-      'LFT OFFICER'
+      'STATUS'
     ];
 
     const rows = filteredParcels.map((p) => {
@@ -739,8 +728,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         `"${rec ? (rec.actualHarvestDate || rec.estimatedHarvestDate) : ''}"`,
         getSelectedProduction(p)?.toFixed(2) ?? '',
         rec && selectedSeason !== 'ALL_SEASONS' && hasActualProduction(rec) ? rec.yieldMtPerHa.toFixed(2) : '',
-        `"${rec ? rec.productionStatus : 'Not recorded'}"`,
-        `"${rec ? rec.lftOfficerName : p.focalPerson}"`
+        `"${rec ? rec.productionStatus : 'Not recorded'}"`
       ];
     });
 
@@ -765,7 +753,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         <td style="padding: 6px; border: 1px solid #ccc; font-weight: bold; font-family: monospace;">${p.swineNameOrId || p.tagNumber}</td>
         <td style="padding: 6px; border: 1px solid #ccc; font-weight: bold;">${getFarmerDisplayName(p)}</td>
         <td style="padding: 6px; border: 1px solid #ccc;">Brgy. ${p.barangay}</td>
-        <td style="padding: 6px; border: 1px solid #ccc;">${p.breed} (${p.seedType || 'INBRED'})</td>
+        <td style="padding: 6px; border: 1px solid #ccc;">${getRecordedCropValue(p.breed) || 'N/A'} (${getRecordedCropValue(p.seedType) || 'N/A'})</td>
         <td style="padding: 6px; border: 1px solid #ccc;">${p.purpose || 'Irrigated Lowland'}</td>
         <td style="padding: 6px; border: 1px solid #ccc; text-align: right; font-weight: bold;">${(p.weightKg || p.areaHa || 0).toFixed(2)} ha</td>
         <td style="padding: 6px; border: 1px solid #ccc; text-align: right;">${displayProduction(p)}</td>
@@ -814,8 +802,8 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
           <div style="width: 250px; text-align: center;">
             <p>Prepared by:</p>
             <br/><br/>
-            <p style="border-top: 1px solid #000; font-weight: bold; margin-top: 20px;">${currentUser?.name || 'Authorized LFT Officer'}</p>
-            <p style="font-size: 9pt; margin: 0;">Local Farmer Technician / AEW</p>
+            <p style="border-top: 1px solid #000; font-weight: bold; margin-top: 20px;">${currentUser?.name || 'Municipal Agriculture Office'}</p>
+            <p style="font-size: 9pt; margin: 0;">Municipal Agriculture Office</p>
           </div>
           <div style="width: 250px; text-align: center;">
             <p>Attested & Approved by:</p>
@@ -1467,12 +1455,13 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                     (parcel.boundaryCoords && parcel.boundaryCoords.length >= 3) ||
                     (parcel.polygonCoords && Array.isArray(parcel.polygonCoords) && parcel.polygonCoords.length >= 3)
                   );
-                  const ecoBadge = getEcosystemBadge(parcel.purpose, parcel.ecosystem);
-
-                  // Extract active seasonal record for this cropping season
                   const seasonalRecord = getSeasonRecord(parcel, selectedSeason);
-
-                  const activeVariety = seasonalRecord?.seedVariety || (matchesSeasonFilter(parcel.croppingSeason || parcel.season, selectedSeason) ? parcel.breed : '—');
+                  const showParcelCrop = matchesSeasonFilter(parcel.croppingSeason || parcel.season, selectedSeason);
+                  const activeVariety = getRecordedCropValue(seasonalRecord?.seedVariety ?? (showParcelCrop ? parcel.breed : ''));
+                  const activeSeedType = getRecordedCropValue(seasonalRecord?.seedType ?? (showParcelCrop ? parcel.seedType : ''));
+                  const tenure = getRecordedCropValue(seasonalRecord?.tenure ?? (showParcelCrop ? parcel.sex : ''));
+                  const ecosystem = getRecordedCropValue(seasonalRecord?.ecosystem ?? (showParcelCrop ? parcel.purpose || parcel.ecosystem : ''));
+                  const ecoBadge = getEcosystemBadge(ecosystem);
 
                   if (isEditing && inlineEditData) {
                     return (
@@ -1567,32 +1556,12 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
                         {/* 5. RICE VARIETY */}
                         <td className="w-44 min-w-[160px] py-2 px-2 whitespace-nowrap border-r border-amber-300">
-                          <select
-                            value={inlineEditData.breed}
-                            onChange={(e) =>
-                              setInlineEditData({ ...inlineEditData, breed: e.target.value })
-                            }
-                            className="w-full px-1.5 py-1 bg-white border border-stone-300 rounded text-xs font-medium focus:ring-2 focus:ring-emerald-600 shadow-2xs cursor-pointer"
-                          >
-                            {RICE_VARIETIES.map((rv) => (
-                              <option key={rv.name} value={rv.name}>
-                                {rv.name}
-                              </option>
-                            ))}
-                          </select>
+                          {activeVariety || 'N/A'}
                         </td>
 
                         {/* 6. TENURE */}
                         <td className="w-28 min-w-[100px] py-2 px-2 text-center whitespace-nowrap border-r border-amber-300">
-                          <input
-                            type="text"
-                            value={inlineEditData.commodity}
-                            onChange={(e) =>
-                              setInlineEditData({ ...inlineEditData, commodity: e.target.value })
-                            }
-                            className="w-full px-1.5 py-1 bg-white border border-stone-300 rounded text-xs font-medium text-center focus:ring-2 focus:ring-emerald-600 shadow-2xs"
-                            placeholder="Owner"
-                          />
+                          {tenure || 'N/A'}
                         </td>
 
                         {/* 7. FARM AREA (HA) */}
@@ -1620,18 +1589,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
                         {/* 9. AGRO-ECOSYSTEM */}
                         <td className="w-36 min-w-[130px] py-2 px-2 whitespace-nowrap border-r border-amber-300">
-                          <select
-                            value={inlineEditData.purpose || 'Irrigated Lowland (NIA)'}
-                            onChange={(e) =>
-                              setInlineEditData({ ...inlineEditData, purpose: e.target.value })
-                            }
-                            className="w-full px-1.5 py-1 bg-white border border-stone-300 rounded text-xs font-medium text-stone-800 focus:ring-2 focus:ring-emerald-600 shadow-2xs cursor-pointer"
-                          >
-                            <option value="Irrigated Lowland (NIA)">Irrigated Lowland</option>
-                            <option value="Rainfed Lowland">Rainfed Lowland</option>
-                            <option value="Hybrid Seed Production">Hybrid Lowland</option>
-                            <option value="Upland Rice">Upland Rice</option>
-                          </select>
+                          {ecoBadge.label}
                         </td>
 
                         {/* 10. DATE REGISTERED */}
@@ -1765,9 +1723,6 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                             >
                               {getFarmerDisplayName(parcel)}
                             </span>
-                            <span className="text-[10px] text-gov-muted truncate block max-w-[170px]">
-                              {parcel.focalPerson ? `LFT: ${parcel.focalPerson}` : `Purok ${parcel.purok || '1'}`}
-                            </span>
                           </div>
                         </div>
                       </td>
@@ -1781,17 +1736,17 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                       <td className="w-44 min-w-[160px] py-2 px-3 whitespace-nowrap border-r border-stone-200">
                         <div className="flex flex-col">
                           <span className="font-semibold text-gov-ink text-xs truncate max-w-[150px]" title={activeVariety}>
-                            {activeVariety || '—'}
+                            {activeVariety || 'N/A'}
                           </span>
                           <span className="text-[10px] text-gov-muted font-normal">
-                            {seasonalRecord?.seedType || (activeVariety === '—' ? '—' : parcel.seedType || 'Unknown')}
+                            {activeSeedType || 'N/A'}
                           </span>
                         </div>
                       </td>
 
                       {/* 6. TENURE */}
                       <td className="w-28 min-w-[100px] py-2 px-2 text-center whitespace-nowrap text-xs text-gov-muted border-r border-stone-200">
-                        {parcel.sex || 'Owner'}
+                        {tenure || 'N/A'}
                       </td>
 
                       {/* 7. FARM AREA (HA) */}
@@ -2271,7 +2226,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                   <div>
                     <span className="text-[10px] font-bold text-slate-400 uppercase block">Rice Variety &amp; Ecosystem</span>
                     <span className="font-semibold text-slate-800">
-                      {certificateParcel.breed} • {certificateParcel.purpose} ({certificateParcel.seedType || 'INBRED'})
+                      {getRecordedCropValue(certificateParcel.breed) || 'N/A'} • {getRecordedCropValue(certificateParcel.purpose) || 'N/A'} ({getRecordedCropValue(certificateParcel.seedType) || 'N/A'})
                     </span>
                   </div>
                   <div>
@@ -2286,17 +2241,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               </div>
 
               {/* Signatories Row */}
-              <div className="pt-6 grid grid-cols-3 gap-2 text-center text-[10.5px]">
-                <div>
-                  <div className="h-9 flex items-end justify-center font-serif font-bold text-slate-800">
-                    {certificateParcel.focalPerson || getAssignedLftForBarangay(certificateParcel.barangay)?.name || 'Not assigned'}
-                  </div>
-                  <div className="border-t border-slate-400 pt-1 font-extrabold text-slate-900 uppercase">
-                    Assigned LFT Officer
-                  </div>
-                  <div className="text-[9.5px] text-slate-500">Local Farmer Technician</div>
-                </div>
-
+              <div className="pt-6 grid grid-cols-2 gap-2 text-center text-[10.5px]">
                 <div>
                   <div className="h-9 flex items-end justify-center font-serif font-bold text-slate-800">
                     Engr. Arnaldo M. Valdez
@@ -2461,9 +2406,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                 <div>
                   <p className="text-slate-500 mb-8">Prepared &amp; Inspected by:</p>
                   <p className="font-bold border-t border-slate-400 pt-1 text-slate-900 uppercase">
-                    {currentUser?.name || 'Authorized LFT Officer'}
+                    {currentUser?.name || 'Municipal Agriculture Office'}
                   </p>
-                  <p className="text-[10px] text-slate-500">Local Farmer Technician / Agricultural Extension Worker</p>
+                  <p className="text-[10px] text-slate-500">Municipal Agriculture Office</p>
                 </div>
                 <div>
                   <p className="text-slate-500 mb-8">Attested &amp; Approved by:</p>

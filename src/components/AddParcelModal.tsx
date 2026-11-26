@@ -5,15 +5,13 @@ import {
   BARANGAY_PARCEL_CODES,
   OfficialBarangay,
   OFFICIAL_15_BARANGAYS,
-  getAssignedLftForBarangay,
-  getBarangayZone,
+  getBarangayZone, getBarangayClassifications,
   getBarangayLabel,
   getDisplayBarangay,
   getUserAssignedBarangays,
   isUserAuthorizedForBarangay,
   matchBarangay
 } from '../data/barangays';
-import { ACTIVE_SEASON } from '../data/seasonalProduction';
 import { RegistrationLocationMap } from './RegistrationLocationMap';
 import { SafeImage } from './SafeImage';
 import { useApp } from '../context/AppContext';
@@ -92,10 +90,6 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     currentUser,
     barangayProfiles,
     permissions,
-    ecosystems,
-    tenures,
-    seasons,
-    irrigationAssociations,
     parcels
   } = useApp();
 
@@ -178,25 +172,16 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     barangay: effectiveDefaultBarangay,
     purok: 'Purok Riverside',
     address: 'Silago, Southern Leyte',
-    breed: 'NSIC Rc 222',
-    seedType: 'INBRED',
-    sex: 'Owner-Cultivator',
-    ageMonths: 90,
+    ageMonths: 0,
     weightKg: 1.45,
     scale: 'Smallholder (<2 ha)',
-    purpose: 'Irrigated Lowland (NIA)',
-    irrigationAssociation: 'Balagawan Communal Irrigators Association (BCIA)',
     vaccinationStatus: 'RSBSA Enrolled & PCIC Insured',
-    healthStatus: 'Active Crop (Tillering)',
+    healthStatus: 'Registered (Pending Crop Form)',
     biosecurityScore: 'Georeferenced (GPS Polygon Mapped)',
     registrationDate: new Date().toISOString().split('T')[0],
-    focalPerson: getAssignedLftForBarangay(effectiveDefaultBarangay).name,
     lat: 10.5335,
     lng: 125.162,
     syncStatus: 'Live Synced',
-    targetYieldMt: 6.1,
-    plantingDate: '',
-    croppingSeason: ACTIVE_SEASON,
     commodity: 'Rice',
     pestAdvisoryNotice: 'Routine water and nutrient monitoring advised.'
   });
@@ -219,11 +204,6 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
         weightKg:
           Number(editingParcel.weightKg || editingParcel.areaHa || editingParcel.farm_area_ha) ||
           1.25,
-        irrigationAssociation:
-          editingParcel.irrigationAssociation ||
-          irrigationAssociations[0] ||
-          'Balagawan Communal Irrigators Association (BCIA)',
-        seedType: editingParcel.seedType || 'INBRED',
         commodity: 'Rice'
       });
       setCustomValues(
@@ -255,9 +235,6 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
         purok: 'Purok Riverside',
         address: residentialAddress,
         residential_address: residentialAddress,
-        breed: 'Not yet assigned',
-        seedType: 'INBRED',
-        sex: tenures[0] || 'Owner-Cultivator',
         ageMonths: 0,
         weightKg: initialCoords?.areaHa ? Number(initialCoords.areaHa.toFixed(2)) : 1.25,
         scale: (initialCoords?.areaHa || 1.25) < 2
@@ -265,21 +242,14 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
           : (initialCoords?.areaHa || 1.25) <= 5
           ? 'Medium Farm (2-5 ha)'
           : 'Commercial (>5 ha)',
-        purpose: ecosystems[0] || 'Irrigated Lowland (NIA)',
-        irrigationAssociation:
-          irrigationAssociations[0] || 'Balagawan Communal Irrigators Association (BCIA)',
         vaccinationStatus: 'RSBSA Enrolled & PCIC Insured',
         healthStatus: 'Registered (Pending Crop Form)',
         biosecurityScore: 'Georeferenced (GPS Polygon Mapped)',
         registrationDate: new Date().toISOString().split('T')[0],
-        focalPerson: getAssignedLftForBarangay(farmBarangay).name,
         lat: initialCoords ? Number(initialCoords.lat.toFixed(6)) : 10.5335,
         lng: initialCoords ? Number(initialCoords.lng.toFixed(6)) : 125.162,
         boundaryCoords: initialCoords?.boundaryCoords,
         syncStatus: 'Live Synced',
-        targetYieldMt: 6.0,
-        plantingDate: '',
-        croppingSeason: seasons[0] || ACTIVE_SEASON,
         commodity: 'Rice',
         pestAdvisoryNotice: 'Routine water and nutrient monitoring advised.'
       });
@@ -819,6 +789,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     );
 
     const finalParcel: FarmParcel = {
+      ...editingParcel,
       tagNumber: formattedTag,
       swineNameOrId: formData.swineNameOrId || 'NO RSBSA',
       rsbsa_no: formData.swineNameOrId || 'NO RSBSA',
@@ -834,9 +805,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       address: formData.residential_address || formData.address || `${targetBrgy}, Silago, Southern Leyte`,
       residential_address: formData.residential_address || formData.address || `${targetBrgy}, Silago, Southern Leyte`,
       contactNumber: cleanContact || '09170000000',
-      breed: formData.breed || 'Not yet assigned',
-      seedType: formData.seedType || 'INBRED',
-      sex: formData.sex || 'Owner-Cultivator',
+      breed: formData.breed || '',
+      sex: formData.sex || '',
       ageMonths: Number(formData.ageMonths) || 0,
       weightKg: Number(formData.weightKg) || 1.0,
       areaHa: Number(formData.weightKg) || 1.0,
@@ -847,15 +817,12 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
           : Number(formData.weightKg) <= 5
           ? 'Medium Farm (2-5 ha)'
           : 'Commercial (>5 ha)',
-      purpose: formData.purpose || 'Irrigated Lowland (NIA)',
-      irrigationAssociation:
-        formData.irrigationAssociation || 'Balagawan Communal Irrigators Association (BCIA)',
+      purpose: formData.purpose || '',
       vaccinationStatus: formData.vaccinationStatus || 'RSBSA Enrolled & PCIC Insured',
       healthStatus: formData.healthStatus || 'Registered (Pending Crop Form)',
       biosecurityScore: 'Georeferenced (GPS Polygon Mapped)',
       registrationDate: formData.registrationDate || new Date().toISOString().split('T')[0],
-      focalPerson:
-        formData.focalPerson || getAssignedLftForBarangay(targetBrgy).name,
+      focalPerson: formData.focalPerson || '',
       lat: Number(formData.lat) || 10.5335,
       lng: Number(formData.lng) || 125.162,
       gps_coordinates: `${Number(formData.lat) || 10.5335}, ${Number(formData.lng) || 125.162}`,
@@ -863,10 +830,6 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       syncStatus: isOffline ? 'Offline / Pending Sync' : 'Live Synced',
       is_pending_sync: isOffline,
       isPendingSync: isOffline,
-      targetYieldMt: Number(formData.targetYieldMt) || 6.0,
-      plantingDate: formData.plantingDate || '',
-      croppingSeason: formData.croppingSeason || ACTIVE_SEASON,
-      season: formData.croppingSeason || ACTIVE_SEASON,
       commodity: 'Rice',
       commodity_planted: 'Rice',
       pestAdvisoryNotice: formData.pestAdvisoryNotice || 'Routine monitoring advised.',
@@ -1110,7 +1073,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                     {/* RSBSA Reference Number */}
                     {formSchema.isVisible('reg-rsbsa') && (
-                      <div className="space-y-1">
+                      <div style={{ order: formSchema.getFieldOrder('reg-rsbsa') }} className="space-y-1">
                         <div className="flex items-center justify-between gap-2">
                           <label className={OFFICE_LABEL_CLASS}>
                             {formSchema.getLabel('reg-rsbsa', 'RSBSA No. / Reference')}{' '}
@@ -1153,7 +1116,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
                     {/* Parcel ID (Unique Tag) */}
                     {formSchema.isVisible('reg-parcel-id') && (
-                      <div className="space-y-1">
+                      <div style={{ order: formSchema.getFieldOrder('reg-parcel-id') }} className="space-y-1">
                         <label className={OFFICE_LABEL_CLASS}>
                           {formSchema.getLabel('reg-parcel-id', 'Registration Parcel ID')}{' '}
                           {formSchema.isRequired('reg-parcel-id') && (
@@ -1177,7 +1140,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
                     {/* Contact Number */}
                     {formSchema.isVisible('reg-contact') && (
-                      <div className="space-y-1">
+                      <div style={{ order: formSchema.getFieldOrder('reg-contact') }} className="space-y-1">
                         <label className={OFFICE_LABEL_CLASS}>
                           {formSchema.getLabel('reg-contact', 'Mobile / Contact No.')}{' '}
                           {formSchema.isRequired('reg-contact') && (
@@ -1220,7 +1183,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                   {/* Farmer Names (Family Name, Given Name, Middle Name) */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
                     {formSchema.isVisible('reg-family-name') && (
-                      <div className="space-y-1">
+                      <div style={{ order: formSchema.getFieldOrder('reg-family-name') }} className="space-y-1">
                         <label className={OFFICE_LABEL_CLASS}>
                           {formSchema.getLabel('reg-family-name', 'Family Name')}{' '}
                           {formSchema.isRequired('reg-family-name') && (
@@ -1239,7 +1202,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                     )}
 
                     {formSchema.isVisible('reg-given-name') && (
-                      <div className="space-y-1">
+                      <div style={{ order: formSchema.getFieldOrder('reg-given-name') }} className="space-y-1">
                         <label className={OFFICE_LABEL_CLASS}>
                           {formSchema.getLabel('reg-given-name', 'Given Name')}{' '}
                           {formSchema.isRequired('reg-given-name') && (
@@ -1258,7 +1221,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                     )}
 
                     {formSchema.isVisible('reg-middle-name') && (
-                      <div className="space-y-1">
+                      <div style={{ order: formSchema.getFieldOrder('reg-middle-name') }} className="space-y-1">
                         <label className={OFFICE_LABEL_CLASS}>
                           {formSchema.getLabel('reg-middle-name', 'Middle Name')}{' '}
                           {formSchema.isRequired('reg-middle-name') && (
@@ -1276,7 +1239,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                       </div>
                     )}
                     {formSchema.isVisible('reg-suffix') && (
-                      <div className="space-y-1">
+                      <div style={{ order: formSchema.getFieldOrder('reg-suffix') }} className="space-y-1">
                         <label htmlFor={suffixId} className={OFFICE_LABEL_CLASS}>
                           {formSchema.getLabel('reg-suffix', 'Suffix')}{' '}
                           {formSchema.isRequired('reg-suffix') && <span className="text-red-600">*</span>}
@@ -1370,7 +1333,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                   {/* Birthday & Residential Address */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                     {formSchema.isVisible('reg-birthday') && (
-                      <div className="space-y-1">
+                      <div style={{ order: formSchema.getFieldOrder('reg-birthday') }} className="space-y-1">
                         <label className={OFFICE_LABEL_CLASS}>
                           {formSchema.getLabel('reg-birthday', 'Date of Birth')}{' '}
                           {formSchema.isRequired('reg-birthday') && (
@@ -1388,7 +1351,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                     )}
 
                     {formSchema.isVisible('reg-res-barangay') && (
-                      <div className="space-y-1">
+                      <div style={{ order: formSchema.getFieldOrder('reg-res-barangay') }} className="space-y-1">
                         <label className={OFFICE_LABEL_CLASS}>
                           {formSchema.getLabel('reg-res-barangay', 'Residential Barangay')}{' '}
                           {formSchema.isRequired('reg-res-barangay') && (
@@ -1416,7 +1379,9 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                           {!residentialOptions.includes(selectedResidentialBarangay) && (
                             <option value={selectedResidentialBarangay}>{selectedResidentialBarangay}</option>
                           )}
-                          {(['Coastal', 'Upland'] as const).map((zone) => (
+                          {getBarangayClassifications(barangayProfiles).filter((zone) =>
+                            OFFICIAL_15_BARANGAYS.some((name) => getBarangayZone(name, barangayProfiles) === zone)
+                          ).map((zone) => (
                             <optgroup key={zone} label={zone}>
                               {OFFICIAL_15_BARANGAYS.filter((b) => getBarangayZone(b, barangayProfiles) === zone).map((b) => (
                                 <option key={b} value={b}>{getBarangayLabel(b, barangayProfiles)}</option>
@@ -1497,7 +1462,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                     <div className="grid grid-cols-1 sm:grid-cols-4 gap-3.5">
                       {/* Farm Barangay - RESTRICTED TO LFT ASSIGNED JURISDICTION */}
                       {formSchema.isVisible('reg-farm-barangay') && (
-                        <div className="space-y-1 sm:col-span-2">
+                        <div style={{ order: formSchema.getFieldOrder('reg-farm-barangay') }} className="space-y-1 sm:col-span-2">
                           <div className="flex items-center justify-between gap-2">
                             <label className={OFFICE_LABEL_CLASS}>
                               {formSchema.getLabel('reg-farm-barangay', 'Farm Location Barangay')}{' '}
@@ -1516,17 +1481,17 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                             disabled={isRestrictedForEditing}
                             onChange={(e) => {
                               const newBrgy = e.target.value;
-                              const assigned = getAssignedLftForBarangay(newBrgy);
                               setFormData({
                                 ...formData,
                                 barangay: newBrgy,
-                                farmLocation: newBrgy.toUpperCase(),
-                                focalPerson: assigned.name
+                                farmLocation: newBrgy.toUpperCase()
                               });
                             }}
                             className={OFFICE_SELECT_CLASS}
                           >
-                            {(['Coastal', 'Upland'] as const).map((zone) => (
+                            {getBarangayClassifications(barangayProfiles).filter((zone) =>
+                              availableBarangays.some(({ name }) => getBarangayZone(name, barangayProfiles) === zone)
+                            ).map((zone) => (
                             <optgroup key={zone} label={zone}>
                               {availableBarangays.filter((b) => getBarangayZone(b.name, barangayProfiles) === zone).map((b) => (
                                 <option key={b.name} value={b.name}>{getBarangayLabel(b.name, barangayProfiles)}</option>
@@ -1539,7 +1504,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
                       {/* Purok / Sitio */}
                       {formSchema.isVisible('reg-purok') && (
-                        <div className="space-y-1">
+                        <div style={{ order: formSchema.getFieldOrder('reg-purok') }} className="space-y-1">
                           <label className={OFFICE_LABEL_CLASS}>
                             {formSchema.getLabel('reg-purok', 'Purok / Sitio')}{' '}
                             {formSchema.isRequired('reg-purok') && (
@@ -1559,7 +1524,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
                       {/* Farm Area in Hectares */}
                       {formSchema.isVisible('reg-area') && (
-                        <div className="space-y-1">
+                        <div style={{ order: formSchema.getFieldOrder('reg-area') }} className="space-y-1">
                           <label className={OFFICE_LABEL_CLASS}>
                             {formSchema.getLabel('reg-area', 'Farm Area (Hectares)')}{' '}
                             {formSchema.isRequired('reg-area') && (
@@ -1605,7 +1570,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                     {/* GPS Coordinates */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                       {formSchema.isVisible('reg-lat') && (
-                        <div className="space-y-1">
+                        <div style={{ order: formSchema.getFieldOrder('reg-lat') }} className="space-y-1">
                           <label className={OFFICE_LABEL_CLASS}>
                             {formSchema.getLabel('reg-lat', 'Latitude')}{' '}
                             {formSchema.isRequired('reg-lat') && (
@@ -1625,7 +1590,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                       )}
 
                       {formSchema.isVisible('reg-lng') && (
-                        <div className="space-y-1">
+                        <div style={{ order: formSchema.getFieldOrder('reg-lng') }} className="space-y-1">
                           <label className={OFFICE_LABEL_CLASS}>
                             {formSchema.getLabel('reg-lng', 'Longitude')}{' '}
                             {formSchema.isRequired('reg-lng') && (

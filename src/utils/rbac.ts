@@ -1,5 +1,5 @@
 import { User, FarmParcel, LftAccount } from '../types';
-import { getUserAssignedBarangays, matchBarangay } from '../data/barangays';
+import { getUserAssignedBarangays, isUserAuthorizedForBarangay, matchBarangay } from '../data/barangays';
 
 /**
  * Role-Based Access Control (RBAC) Permissions Engine
@@ -108,7 +108,7 @@ export function canUserRecordSeasonalProduction(user: User | null | undefined, b
   if (user.role === 'Barangay Focal Person') {
     const assigned = getUserAssignedBarangays(user);
     if (!assigned || assigned.length === 0) return false;
-    return assigned.some((b) => matchBarangay(barangayName, b));
+    return isUserAuthorizedForBarangay(user, barangayName);
   }
   return false;
 }
@@ -122,7 +122,7 @@ export function canUserEditGisPolygons(user: User | null | undefined, barangayNa
   if (user.role === 'Barangay Focal Person') {
     const assigned = getUserAssignedBarangays(user);
     if (!assigned || assigned.length === 0) return false;
-    return assigned.some((b) => matchBarangay(barangayName, b));
+    return isUserAuthorizedForBarangay(user, barangayName);
   }
   return false;
 }

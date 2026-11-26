@@ -4,8 +4,10 @@ import {
   BARANGAYS,
   OFFICIAL_15_BARANGAYS,
   ASSIGNED_10_BARANGAYS,
-  WELLA_ASSIGNED_BARANGAYS,
-  BRANDO_ASSIGNED_BARANGAYS,
+  getDisplayBarangay,
+  getBarangayClassifications,
+  getBarangayLabel,
+  getBarangayZone,
   matchBarangay
 } from '../data/barangays';
 import { LftAccount, isAccountActive } from '../types';
@@ -46,6 +48,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import { uploadFarmPhoto } from '../utils/supabaseClient';
+import { provisionLftAccount } from '../utils/staffAccounts';
 import { SafeImage } from '../components/SafeImage';
 
 export const AccountsView: React.FC = () => {
@@ -54,7 +57,8 @@ export const AccountsView: React.FC = () => {
     setCurrentUser,
     parcels,
     lftAccounts,
-    addLftAccount,
+    barangayProfiles,
+    syncWithSupabase,
     updateLftAccount,
     deleteLftAccount,
     resetLftAccounts,
@@ -85,7 +89,7 @@ export const AccountsView: React.FC = () => {
   // Form state for Adding / Editing LFT Officer
   const [formData, setFormData] = useState({
     name: '',
-    barangay: 'Salvacion, Laguna, Pd2, Pd1, Hingatungan',
+    barangay: '',
     username: '',
     contactNumber: '',
     terrain: 'NIA Irrigated Lowland & River Basin Sector',
@@ -96,6 +100,8 @@ export const AccountsView: React.FC = () => {
     photoUrl: '',
   });
 
+  const [initialPassword, setInitialPassword] = useState('');
+  const [showInitialPassword, setShowInitialPassword] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
@@ -156,21 +162,16 @@ export const AccountsView: React.FC = () => {
   };
 
   // Format uniform display tag names for barangay chips
-  const formatBarangayChipName = (rawName: string): string => {
-    const trimmed = rawName.trim();
-    const lower = trimmed.toLowerCase();
-    if (lower === 'pd1' || lower === 'pob1' || lower === 'poblacion 1' || lower === 'poblacion district 1') return 'Poblacion District 1';
-    if (lower === 'pd2' || lower === 'pob2' || lower === 'poblacion 2' || lower === 'poblacion district 2') return 'Poblacion District 2';
-    if (lower === 'laguma') return 'Laguna';
-    return trimmed;
-  };
+  const formatBarangayChipName = (name: string) => getBarangayLabel(getDisplayBarangay(name), barangayProfiles);
 
   const handleOpenAdd = () => {
+    setInitialPassword('');
+    setShowInitialPassword(false);
     setEditingAccount(null);
     setSaveError('');
     setFormData({
       name: '',
-      barangay: 'Salvacion, Laguna, Pd2, Pd1, Hingatungan',
+      barangay: '',
       username: '',
       contactNumber: '0917-000-0000',
       terrain: 'NIA Irrigated Lowland & River Basin Sector',
@@ -184,6 +185,8 @@ export const AccountsView: React.FC = () => {
   };
 
   const handleOpenEdit = (acc: LftAccount) => {
+    setInitialPassword('');
+    setShowInitialPassword(false);
     setEditingAccount(acc);
     setSaveError('');
     setFormData({
@@ -314,6 +317,15 @@ export const AccountsView: React.FC = () => {
       setSaveError('Enter the officer name, registered email, and at least one assigned barangay.');
       return;
     }
+    if (!/^[a-z0-9][a-z0-9._-]{1,59}$/i.test(formData.username.trim()) ||
+        ['admin', 'administrator', 'mao', 'silago.test'].includes(formData.username.trim().toLowerCase())) {
+      setSaveError('Choose an available username using letters, numbers, periods, underscores, or hyphens.');
+      return;
+    }
+    if (lftAccounts.some((account) => account.id !== editingAccount?.id && account.username.toLowerCase() === formData.username.trim().toLowerCase())) {
+      setSaveError('This username is already assigned to another LFT account.');
+      return;
+    }
     if (lftAccounts.some((account) => account.id !== editingAccount?.id && account.email?.toLowerCase() === email)) {
       setSaveError('This email is already assigned to another LFT account.');
       return;
@@ -324,7 +336,7 @@ export const AccountsView: React.FC = () => {
       email,
       assignedBarangays,
       barangay: assignedBarangays.join(', '),
-      username: formData.username.trim() || email.split('@')[0],
+      username: formData.username.trim().toLowerCase(),
       contactNumber: formData.contactNumber.trim(),
       terrain: formData.terrain,
       areaHa: Number(formData.areaHa) || 0,
@@ -332,18 +344,27 @@ export const AccountsView: React.FC = () => {
       puroks: Number(formData.puroks) || 20,
       photoUrl: formData.photoUrl.trim() || undefined
     };
+    if (!editingAccount && initialPassword.length < 8) {
+      setSaveError('Enter an initial password of at least 8 characters.');
+      return;
+    }
     setIsSaving(true);
     try {
       const saved = editingAccount
         ? await updateLftAccount(editingAccount.id, account)
-        : await addLftAccount(account);
+        : Boolean(await provisionLftAccount(account, initialPassword));
       if (!saved) {
         setSaveError('Supabase could not save this LFT account. Check your connection and admin access.');
         return;
       }
-      showToast(editingAccount ? 'LFT account updated.' : 'LFT roster entry created.');
+      if (!editingAccount) void syncWithSupabase();
+      setInitialPassword('');
+      setShowInitialPassword(false);
+      showToast(editingAccount ? 'LFT account updated.' : 'LFT account created and ready to sign in.');
       setIsModalOpen(false);
       setEditingAccount(null);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Unable to save the LFT account.');
     } finally {
       setIsSaving(false);
     }
@@ -744,19 +765,8 @@ export const AccountsView: React.FC = () => {
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-700">Login Username *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.username}
-                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                    placeholder="e.g. wella.bongon"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none font-mono text-xs"
-                  />
-                </div>
 
-                <div className="space-y-1">
+                {editingAccount && <div className="space-y-1">
                   <label className="font-bold text-slate-700">Account Status *</label>
                   <select
                     value={formData.status}
@@ -767,12 +777,9 @@ export const AccountsView: React.FC = () => {
                     <option value="Pending Activation">Pending Activation</option>
                     <option value="Disabled / Inactive">Disabled / Inactive</option>
                   </select>
-                </div>
+                </div>}
               </div>
 
-              <p className="text-xs text-slate-600">
-                The officer signs in through Supabase Auth with this email. Create or invite the Auth user in the Supabase project.
-              </p>
               {saveError && <p role="alert" className="text-xs text-red-700">{saveError}</p>}
 
               {/* Profile Picture URL Field */}
@@ -842,77 +849,27 @@ export const AccountsView: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => setAssignedBarangaysList(WELLA_ASSIGNED_BARANGAYS)}
-                      className="px-2 py-1 rounded-lg text-[10.5px] font-bold bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 hover:border-emerald-300 transition cursor-pointer shadow-2xs"
-                    >
-                      Wella Cluster (5)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAssignedBarangaysList(BRANDO_ASSIGNED_BARANGAYS)}
-                      className="px-2 py-1 rounded-lg text-[10.5px] font-bold bg-white hover:bg-blue-50 text-blue-700 border border-blue-200 hover:border-blue-300 transition cursor-pointer shadow-2xs"
-                    >
-                      Brando Cluster (5)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAssignedBarangaysList(OFFICIAL_15_BARANGAYS)}
-                      className="px-2 py-1 rounded-lg text-[10.5px] font-bold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition cursor-pointer shadow-2xs"
-                    >
-                      All 15
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAssignedBarangaysList([])}
-                      className="px-2 py-1 rounded-lg text-[10.5px] font-bold bg-white hover:bg-red-50 text-red-600 border border-slate-200 transition cursor-pointer shadow-2xs"
-                    >
-                      Clear
-                    </button>
+                  <div className="flex flex-wrap gap-2" aria-label="Select assigned barangays by zone">
+                    {getBarangayClassifications(barangayProfiles).map((zone) => {
+                      const names = OFFICIAL_15_BARANGAYS.filter((name) => getBarangayZone(name, barangayProfiles) === zone);
+                      return <button type="button" key={zone} disabled={!names.length}
+                        onClick={() => setAssignedBarangaysList(names)}
+                        className="rounded-md border border-blue-200 bg-white px-2 py-1 text-xs font-medium text-blue-800 hover:bg-blue-50 disabled:opacity-40">
+                        {zone}
+                      </button>;
+                    })}
+                    <button type="button" onClick={() => setAssignedBarangaysList(OFFICIAL_15_BARANGAYS)} className="rounded-md border border-blue-200 bg-white px-2 py-1">All 15</button>
+                    <button type="button" onClick={() => setAssignedBarangaysList([])} className="rounded-md border border-slate-300 bg-white px-2 py-1">Clear</button>
                   </div>
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-52 overflow-y-auto p-1.5 bg-white rounded-xl border border-slate-200/90 shadow-inner">
-                  {OFFICIAL_15_BARANGAYS.map((bName) => {
-                    const isChecked = isBarangayAssigned(bName, formData.barangay);
-
-                    return (
-                      <div
-                        key={bName}
-                        onClick={() => toggleAssignedBarangay(bName)}
-                        className={`flex items-start gap-2.5 p-2 rounded-lg border transition cursor-pointer select-none ${
-                          isChecked
-                            ? 'bg-emerald-50 border-emerald-400 ring-1 ring-emerald-400/40 text-emerald-950 font-bold shadow-2xs'
-                            : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        <div className="pt-0.5 shrink-0">
-                          <div
-                            className={`w-4 h-4 rounded flex items-center justify-center transition ${
-                              isChecked
-                                ? 'bg-emerald-600 text-white'
-                                : 'border border-slate-300 bg-white'
-                            }`}
-                          >
-                            {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
-                          </div>
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="text-xs truncate block font-bold">
-                              Brgy. {formatBarangayChipName(bName)}
-                            </span>
-                            <span className="text-[8.5px] font-extrabold uppercase px-1 py-0.2 rounded bg-emerald-100 text-emerald-800 shrink-0">
-                              Official
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {OFFICIAL_15_BARANGAYS.map((name) => (
+                    <label key={name} className="flex min-w-0 items-start gap-2 rounded-md border border-slate-200 bg-white p-2 text-sm text-slate-800 has-checked:border-blue-300 has-checked:bg-blue-50">
+                      <input type="checkbox" checked={isBarangayAssigned(name, formData.barangay)}
+                        onChange={() => toggleAssignedBarangay(name)} className="mt-0.5 h-4 w-4 shrink-0 accent-blue-700" />
+                      <span className="break-words">{getBarangayLabel(name, barangayProfiles)}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
 
@@ -928,17 +885,47 @@ export const AccountsView: React.FC = () => {
                   />
                 </div>
 
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700">Login Username *</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.username}
+                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                    placeholder="e.g. wella.bongon"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none font-mono text-xs"
+                  />
+                </div>
                 <div className="space-y-1">
                   <label className="font-bold text-slate-700">Official Municipal Email</label>
                   <input
                     type="email"
                     required
+                    readOnly={Boolean(editingAccount?.authUserId)}
+                    title={editingAccount?.authUserId ? 'This email is linked to the officer’s Supabase sign-in.' : undefined}
                     value={formData.email}
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     placeholder="e.g. wella.bongon@silago-agriculture.gov.ph"
                     className="w-full px-3 py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs"
                   />
                 </div>
+                {!editingAccount && (
+                  <div className="space-y-1">
+                    <label htmlFor="lft-initial-password" className="font-bold text-slate-700">Initial Password</label>
+                    <div className="relative">
+                      <input id="lft-initial-password" type={showInitialPassword ? 'text' : 'password'}
+                        value={initialPassword} onChange={(event) => setInitialPassword(event.target.value)}
+                        minLength={8} required autoComplete="new-password"
+                        className="w-full rounded-md border border-slate-300 px-3 py-2 pr-10 text-sm" />
+                      <button type="button" onClick={() => setShowInitialPassword(!showInitialPassword)}
+                        aria-label={showInitialPassword ? 'Hide initial password' : 'Show initial password'} className="absolute right-2 top-2 text-slate-600">
+                        {showInitialPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 shrink-0">

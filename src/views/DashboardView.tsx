@@ -1,7 +1,7 @@
 import { SeasonProductionPanel } from '../components/SeasonProductionPanel';
 import React, { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { BARANGAYS, getBarangayLabel, getBarangayZone, matchBarangay } from '../data/barangays';
+import { BARANGAYS, getBarangayLabel, getBarangayZone, getBarangayClassifications, matchBarangay } from '../data/barangays';
 import { calculateCropGrowthStage } from '../data/riceVarieties';
 import { FarmParcel, Barangay, PortalTab } from '../types';
 import { OfficeKpiStrip, OfficePanel } from '../components/OfficeFormPrimitives';
@@ -362,7 +362,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 style={{ minHeight: 'unset' }}
               >
                 <option value="ALL">All 15 Barangays</option>
-                {(['Coastal', 'Upland'] as const).map((zone) => (
+                {getBarangayClassifications(barangayProfiles).map((zone) => (
                   <optgroup key={zone} label={zone}>
                     {BARANGAYS.filter((barangay) => getBarangayZone(barangay.name, barangayProfiles) === zone).map((barangay) => (
                       <option key={barangay.name} value={barangay.name}>Brgy. {getBarangayLabel(barangay.name, barangayProfiles)}</option>

@@ -1,35 +1,26 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { FarmParcel, SeasonalProductionRecord } from '../types';
-import { getFarmerPhoto, getLandPhoto } from '../data/photos';
+import { canUserRecordSeasonalProduction } from '../utils/rbac';
+import { getFarmerPhoto } from '../data/photos';
 import { calculateCropGrowthStage } from '../data/riceVarieties';
+import { getRecordedCropValue, hasActualProduction } from '../data/seasonalProduction';
 import { SafeImage } from './SafeImage';
 import {
   X,
   MapPin,
   User,
-  Wheat,
-  Droplets,
-  Calendar,
   ShieldCheck,
   Printer,
   Edit2,
-  Share2,
-  Trash2,
   AlertTriangle,
-  Clock,
-  CheckCircle2,
-  PlusCircle,
-  TrendingUp,
-  Scale,
-  History,
-  Coins
+  PlusCircle
 } from 'lucide-react';
 import { DaLogo, SilagoSeal, BagOngSilagoLogo, OfficialSealsTrio } from './Seals';
 import { SeasonalProductionModal } from './SeasonalProductionModal';
 import { getParcelCustomFields, useRegistryFormSchema } from '../data/formSchema';
 
-export type ParcelModalTab = 'profile' | 'harvest_history' | 'certificate';
+export type ParcelModalTab = 'profile' | 'certificate';
 
 interface ParcelDetailModalProps {
   parcel: FarmParcel | null;
@@ -50,11 +41,12 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [seasonalModalOpen, setSeasonalModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<SeasonalProductionRecord | null>(null);
-  const { parcels, permissions } = useApp();
+  const { parcels, permissions, currentUser } = useApp();
   const parcel = parcels.find((item) => item.tagNumber === initialParcel?.tagNumber) || initialParcel;
   const formSchema = useRegistryFormSchema();
 
   if (!parcel) return null;
+  const canRecordHarvest = canUserRecordSeasonalProduction(currentUser, parcel.barangay);
 
   const customFieldEntries = Object.entries({
     ...getParcelCustomFields(parcel.tagNumber),
@@ -68,16 +60,10 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
     }));
 
   const farmerPhoto = getFarmerPhoto(parcel);
-  const landPhoto = getLandPhoto(parcel);
 
   // Safe field extractions with comprehensive fallbacks
   const seasonalRecords = Array.isArray(parcel?.seasonalRecords) ? parcel.seasonalRecords : [];
-  const farmerDisplayName =
-    (parcel as any)?.farmerFamilyName && (parcel as any)?.farmerGivenName
-      ? `${(parcel as any).farmerFamilyName}, ${(parcel as any).farmerGivenName} ${parcel.farmerMiddleName || ''} ${parcel.farmerSuffix || ''}`.replace(/\s+/g, ' ').trim()
-      : parcel?.raiserName || 'N/A';
-  const barangayName = parcel?.barangay || 'Unspecified';
-  const areaHa = parcel?.weightKg ?? (parcel as any)?.farmAreaHa ?? (parcel as any)?.areaHa ?? 0;
+  const areaHa = Number(parcel.weightKg ?? parcel.areaHa ?? parcel.farm_area_ha ?? 0);
   const latVal = typeof parcel?.lat === 'number' && !isNaN(parcel.lat) ? parcel.lat : (parcel as any)?.coordinates?.lat ?? 10.53;
   const lngVal = typeof parcel?.lng === 'number' && !isNaN(parcel.lng) ? parcel.lng : (parcel as any)?.coordinates?.lng ?? 125.16;
 
@@ -86,52 +72,31 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
     return val.toFixed(5);
   };
 
-  // Summary harvest stats calculations across all cropping seasons
-  const totalHarvestMt = useMemo(() => {
-    return seasonalRecords.reduce((sum, r) => sum + (r.actualProductionVolumeMt ?? 0), 0);
-  }, [seasonalRecords]);
-
-  const totalHarvestBags = useMemo(() => {
-    return seasonalRecords.reduce((sum, r) => {
-      const bags = r.yieldBags ?? r.actualProductionBags ?? Math.round((r.actualProductionVolumeMt || 0) * 20);
-      return sum + bags;
-    }, 0);
-  }, [seasonalRecords]);
-
-  const avgYieldMt = useMemo(() => {
-    if (seasonalRecords.length === 0) return 0;
-    const totalYield = seasonalRecords.reduce((sum, r) => sum + (r.yieldMtPerHa || r.yieldMetricTons || 0), 0);
-    return Number((totalYield / seasonalRecords.length).toFixed(2));
-  }, [seasonalRecords]);
-
-  const totalGrossIncome = useMemo(() => {
-    return seasonalRecords.reduce((sum, r) => {
-      const bags = r.yieldBags ?? r.actualProductionBags ?? Math.round((r.actualProductionVolumeMt || 0) * 20);
-      return sum + (r.grossIncome ?? (bags * 1150));
-    }, 0);
-  }, [seasonalRecords]);
-
-  // Automatically calculate crop growth stage, elapsed days (DAP), and maturity percentage with safe fallback
-  const growthCalc = useMemo(() => {
-    try {
-      return calculateCropGrowthStage(parcel.plantingDate || '', parcel.breed || 'NSIC Rc 222');
-    } catch {
-      return {
-        stage: parcel.healthStatus || 'Active Tillering',
-        phase: 'Vegetative Phase',
-        dap: 35,
-        newlyPlantedDays: 7,
-        vegetativeNet: 45,
-        reproductiveDas: 75,
-        maturityDays: 115,
-        description: 'Growing standing rice crop under regular monitoring.',
-        percentageMaturity: 30,
-        colorClass: 'bg-emerald-50 text-emerald-800 border-emerald-300',
-        estimatedHarvestDate: '2026-11-15',
-        seedType: 'INBRED' as const
-      };
-    }
-  }, [parcel.plantingDate, parcel.breed, parcel.healthStatus]);
+  const cropStage = parcel.plantingDate && parcel.breed
+    ? calculateCropGrowthStage(parcel.plantingDate, parcel.breed)
+    : null;
+  const profileDetails = [
+    ['Registration Parcel ID', parcel.tagNumber],
+    ['RSBSA Reference', parcel.swineNameOrId],
+    ['Date of Birth', parcel.birthday],
+    ['Contact Number', parcel.contactNumber],
+    ['Farm Barangay', parcel.barangay],
+    ['Purok / Sitio', parcel.purok],
+    ['Farm Area', areaHa ? `${areaHa.toFixed(2)} ha` : ''],
+    ['GPS Coordinates', `${formatCoords(latVal)}, ${formatCoords(lngVal)}`],
+    ['Rice Variety', getRecordedCropValue(parcel.breed)],
+    ['Seed Type', getRecordedCropValue(parcel.seedType)],
+    ['Tenure', getRecordedCropValue(parcel.sex || parcel.tenure)],
+    ['Agro-Ecosystem', getRecordedCropValue(parcel.purpose || parcel.ecosystem)],
+    ['Irrigation Association', getRecordedCropValue(parcel.irrigationAssociation)],
+    ['Cropping Season', getRecordedCropValue(parcel.croppingSeason || parcel.season)],
+    ['Planting Date', parcel.plantingDate],
+    ['Target Yield', parcel.targetYieldMt == null ? '' : `${parcel.targetYieldMt.toFixed(2)} MT`],
+    ['RSBSA & Insurance', parcel.vaccinationStatus],
+    ['Crop Stage', cropStage?.stage],
+    ['Estimated Harvest Date', cropStage?.estimatedHarvestDate],
+    ...customFieldEntries.map(({ label, value }) => [label, value])
+  ];
 
   return (
     <div className="fixed inset-0 z-100 flex justify-end bg-black/40 backdrop-blur-xs animate-in fade-in duration-200" onClick={onClose}>
@@ -185,24 +150,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
             }`}
           >
             <User className="w-3.5 h-3.5 text-gov-green" />
-            <span>Profile &amp; Land Details</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('harvest_history')}
-            className={`px-3.5 py-2 font-semibold rounded-t transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap text-xs ${
-              activeTab === 'harvest_history'
-                ? 'bg-white text-gov-ink'
-                : 'text-white/75 hover:text-white hover:bg-white/10'
-            }`}
-          >
-            <Wheat className="w-3.5 h-3.5 text-gov-gold" />
-            <span>Seasonal Harvest History</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-              activeTab === 'harvest_history' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-700 text-slate-300'
-            }`}>
-              {seasonalRecords.length}
-            </span>
+            <span>Farmer Record</span>
           </button>
           <button
             type="button"
@@ -263,11 +211,11 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block">Tenurial Classification:</span>
-                    <strong className="text-slate-800">{parcel.sex}</strong>
+                    <strong className="text-slate-800">{getRecordedCropValue(parcel.sex) || 'N/A'}</strong>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-500 block">Agro-Ecosystem / NIA:</span>
-                    <strong className="text-slate-800">{parcel.purpose}</strong>
+                    <strong className="text-slate-800">{getRecordedCropValue(parcel.purpose) || 'N/A'}</strong>
                   </div>
                   {parcel.irrigationAssociation && (
                     <div className="col-span-2">
@@ -291,11 +239,6 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
               <div className="flex items-center justify-around pt-2 text-[11px]">
                 <div className="text-center">
                   <div className="w-32 border-b border-slate-700 mx-auto mb-1"></div>
-                  <strong className="block text-slate-800">{parcel.focalPerson}</strong>
-                  <span className="text-slate-500 text-[10px]">Assigned Barangay LFT Officer</span>
-                </div>
-                <div className="text-center">
-                  <div className="w-32 border-b border-slate-700 mx-auto mb-1"></div>
                   <strong className="block text-slate-800">Engr. Arnaldo M. Valdez</strong>
                   <span className="text-slate-500 text-[10px]">Municipal Agriculturist / MAO Silago</span>
                 </div>
@@ -312,412 +255,100 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
                 </button>
               </div>
             </div>
-          ) : activeTab === 'harvest_history' ? (
-            <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-linear-to-r from-emerald-900 via-teal-900 to-slate-900 text-white p-4 rounded-2xl shadow-sm">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="p-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                      <History className="w-4 h-4" />
-                    </span>
-                    <h3 className="text-base font-bold text-white">
-                      🌾 Seasonal Harvest History &amp; Records
-                    </h3>
-                  </div>
-                  <p className="text-xs text-emerald-100/80 mt-1">
-                    Kasaysayan sa mga nakalabayng ani, barayti sa binhi, ug abot (yield) ni <strong>{parcel.raiserName}</strong>.
-                  </p>
+          ) : (
+            <article className="overflow-hidden rounded-lg border border-blue-200 bg-white">
+              <header className="flex items-start gap-4 border-b border-blue-200 bg-blue-50 px-4 py-4 sm:px-5">
+                <SafeImage src={farmerPhoto} alt={parcel.raiserName} fallbackType="farmer" className="h-16 w-16 rounded border border-blue-200 object-cover" containerClassName="shrink-0" />
+                <div className="min-w-0">
+                  <h3 className="font-serif text-lg font-bold text-slate-900">{parcel.raiserName}</h3>
+                  <p className="mt-1 text-xs text-slate-600">{parcel.residential_address || parcel.address || 'N/A'}</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingRecord(null);
-                    setSeasonalModalOpen(true);
-                  }}
-                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 self-start sm:self-auto cursor-pointer shadow-md hover:shadow-lg shrink-0"
-                >
-                  <PlusCircle className="w-4 h-4" />
-                  <span>+ Log Harvest for this Season</span>
-                </button>
-              </div>
+              </header>
 
-              {/* Cumulative Metrics Breakdown Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <div className="bg-emerald-50/80 border border-emerald-200 p-3 rounded-xl">
-                  <span className="text-[10px] font-bold text-emerald-800 uppercase block tracking-wider">
-                    Total Harvest
-                  </span>
-                  <div className="text-base font-extrabold font-mono text-emerald-950 mt-0.5">
-                    {totalHarvestBags.toLocaleString()} <span className="text-[11px] font-sans font-medium text-emerald-700">Cavans</span>
-                  </div>
-                  <span className="text-[10px] text-emerald-700 font-mono">
-                    {totalHarvestMt.toFixed(2)} MT total
-                  </span>
-                </div>
+              <section className="p-4 sm:p-5" aria-label="Farmer profile and land details">
+                <h4 className="mb-3 text-sm font-semibold text-blue-950">Farmer Profile &amp; Land Details</h4>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                  {profileDetails.map(([label, value], index) => (
+                    <div key={`${label}-${index}`} className="min-w-0 border-t border-slate-100 pt-2">
+                      <dt className="text-[10px] font-semibold uppercase text-slate-600">{label}</dt>
+                      <dd className="mt-0.5 break-words text-xs font-medium text-slate-900">{value || 'N/A'}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
 
-                <div className="bg-blue-50/80 border border-blue-200 p-3 rounded-xl">
-                  <span className="text-[10px] font-bold text-blue-800 uppercase block tracking-wider">
-                    Total Volume
-                  </span>
-                  <div className="text-base font-extrabold font-mono text-blue-950 mt-0.5">
-                    {totalHarvestMt.toFixed(2)} <span className="text-[11px] font-sans font-medium text-blue-700">MT</span>
-                  </div>
-                  <span className="text-[10px] text-blue-700 font-mono">
-                    {areaHa ? (totalHarvestMt / areaHa).toFixed(1) : '0.0'} MT/ha total
-                  </span>
-                </div>
-
-                <div className="bg-amber-50/80 border border-amber-200 p-3 rounded-xl">
-                  <span className="text-[10px] font-bold text-amber-800 uppercase block tracking-wider">
-                    Average Yield
-                  </span>
-                  <div className="text-base font-extrabold font-mono text-amber-950 mt-0.5">
-                    {avgYieldMt.toFixed(2)} <span className="text-[11px] font-sans font-medium text-amber-700">MT/ha</span>
-                  </div>
-                  <span className="text-[10px] text-amber-700">
-                    Across {seasonalRecords.length} recorded season{seasonalRecords.length === 1 ? '' : 's'}
-                  </span>
-                </div>
-
-                <div className="bg-purple-50/80 border border-purple-200 p-3 rounded-xl">
-                  <span className="text-[10px] font-bold text-purple-800 uppercase block tracking-wider">
-                    Gross Income (Est.)
-                  </span>
-                  <div className="text-base font-extrabold font-mono text-purple-950 mt-0.5">
-                    ₱{totalGrossIncome.toLocaleString()}
-                  </div>
-                  <span className="text-[10px] text-purple-700">
-                    @ ₱1,150 / 50kg bag
-                  </span>
-                </div>
-              </div>
-
-              {/* Breakdown Table */}
-              {seasonalRecords.length === 0 ? (
-                <div className="p-8 bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl text-center space-y-3">
-                  <Wheat className="w-10 h-10 text-slate-400 mx-auto" />
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-700">Walay Narekord nga Ani / No Harvest Records Yet</h4>
-                    <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                      Wala pay nalista nga record sa ani para niining mag-uuma. I-click ang buton sa ubos aron magdugang og bag-ong seasonal harvest record.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
+              <section className="border-t border-blue-200" aria-label="Seasonal harvest history">
+                <header className="flex flex-wrap items-center justify-between gap-2 bg-blue-50 px-4 py-3 sm:px-5">
+                  <h4 className="text-sm font-semibold text-blue-950">Seasonal Harvest History</h4>
+                  {canRecordHarvest && (
+                    <button type="button" onClick={() => {
                       setEditingRecord(null);
                       setSeasonalModalOpen(true);
-                    }}
-                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-2 cursor-pointer shadow-sm"
-                  >
-                    <PlusCircle className="w-4 h-4" />
-                    <span>+ Log Harvest for this Season</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead className="bg-slate-100 text-slate-700 uppercase font-black text-[10px] tracking-wider border-b border-slate-200">
-                      <tr>
-                        <th className="px-3.5 py-3">Cropping Season</th>
-                        <th className="px-3.5 py-3">Seed Variety Planted</th>
-                        <th className="px-3.5 py-3">Harvest Date</th>
-                        <th className="px-3.5 py-3 text-right">Yield (Cavans &amp; MT)</th>
-                        <th className="px-3.5 py-3 text-right">Yield / Ha</th>
-                        <th className="px-3.5 py-3 text-right">Gross Income</th>
-                        <th className="px-3.5 py-3 text-center">Status</th>
-                        <th className="px-3.5 py-3 text-center">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-medium text-slate-800">
-                      {seasonalRecords.map((rec) => {
-                        const seasonLabel = rec.seasonName || (rec.season ? rec.season.split('(')[0].trim() : 'Cropping Season');
-                        const bags = rec.yieldBags ?? rec.actualProductionBags ?? Math.round((rec.actualProductionVolumeMt || 0) * 20);
-                        const volumeMt = rec.actualProductionVolumeMt ?? 0;
-                        const yieldMt = rec.yieldMtPerHa ?? rec.yieldMetricTons ?? (areaHa ? volumeMt / areaHa : 0);
-                        const income = rec.grossIncome ?? (bags * 1150);
-                        const dateLabel = rec.harvestDate || rec.actualHarvestDate || rec.estimatedHarvestDate || '-';
-                        const statusVal = rec.status || (rec.productionStatus === 'Standing Crop' ? 'Ongoing' : rec.productionStatus === 'Crop Failure / Damaged' ? 'Damaged' : 'Harvested');
+                    }} className="inline-flex items-center gap-1.5 rounded bg-blue-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-800">
+                      <PlusCircle className="h-3.5 w-3.5" />
+                      Log Harvest
+                    </button>
+                  )}
+                </header>
 
-                        return (
-                          <tr key={rec.id} className="hover:bg-emerald-50/40 transition">
-                            <td className="px-3.5 py-3 whitespace-nowrap">
-                              <span className="font-bold text-slate-900 block">{seasonLabel}</span>
-                              <span className="text-[10px] text-slate-500 font-mono">LFT: {rec.lftOfficerName || 'MAO Assigned'}</span>
-                            </td>
-                            <td className="px-3.5 py-3 whitespace-nowrap">
-                              <span className="font-bold text-emerald-950 block">{rec.varietyPlanted || rec.seedVariety}</span>
-                              <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-slate-100 font-mono text-slate-600">
-                                {rec.seedType || 'INBRED'}
-                              </span>
-                            </td>
-                            <td className="px-3.5 py-3 whitespace-nowrap text-[11px] font-mono text-slate-700">
-                              <div className="flex items-center gap-1">
-                                <Calendar className="w-3 h-3 text-slate-400" />
-                                <span>{dateLabel}</span>
-                              </div>
-                            </td>
-                            <td className="px-3.5 py-3 whitespace-nowrap text-right font-mono">
-                              <span className="font-extrabold text-slate-900 block">{bags} Bags</span>
-                              <span className="text-[10.5px] text-slate-500">({volumeMt.toFixed(2)} MT)</span>
-                            </td>
-                            <td className="px-3.5 py-3 whitespace-nowrap text-right font-mono">
-                              <span className="font-black text-emerald-800 bg-emerald-100/60 px-2 py-0.5 rounded-md">
-                                {yieldMt.toFixed(2)} MT/ha
-                              </span>
-                            </td>
-                            <td className="px-3.5 py-3 whitespace-nowrap text-right font-mono">
-                              <span className="font-bold text-slate-900">₱{income.toLocaleString()}</span>
-                            </td>
-                            <td className="px-3.5 py-3 whitespace-nowrap text-center">
-                              <span
-                                className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
-                                  statusVal === 'Harvested' || rec.productionStatus === 'Harvest Completed'
-                                    ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
-                                    : statusVal === 'Damaged' || rec.productionStatus === 'Crop Failure / Damaged'
-                                    ? 'bg-rose-100 text-rose-900 border-rose-300'
-                                    : 'bg-amber-100 text-amber-900 border-amber-300'
-                                }`}
-                              >
-                                {statusVal}
-                              </span>
-                            </td>
-                            <td className="px-3.5 py-3 whitespace-nowrap text-center">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingRecord(rec);
-                                  setSeasonalModalOpen(true);
-                                }}
-                                className="px-2.5 py-1 text-slate-700 hover:text-emerald-800 hover:bg-slate-100 rounded-md text-[11px] font-bold transition cursor-pointer border border-slate-200"
-                              >
-                                Edit
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              {/* Official Farmer & Land Identity Dossier Card */}
-              <div className="bg-white border border-gov-line rounded p-4 space-y-4">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 border-b border-gov-line/70 pb-4">
-                  <div className="w-16 h-16 rounded border border-gov-line bg-gov-canvas overflow-hidden shrink-0 flex items-center justify-center">
-                    <SafeImage
-                      src={farmerPhoto}
-                      alt={parcel.raiserName}
-                      fallbackType="farmer"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-xs font-bold text-gov-ink bg-gov-canvas border border-gov-line px-2 py-0.5 rounded-sm">
-                        {parcel.swineNameOrId || parcel.tagNumber}
-                      </span>
-                      <span className="text-[10px] font-semibold text-gov-green bg-gov-green-soft px-2 py-0.5 rounded-sm border border-emerald-200">
-                        {parcel.sex || 'Owner-Cultivator'}
-                      </span>
-                    </div>
-                    <h3 className="font-serif font-bold text-lg text-gov-ink leading-tight mt-1 truncate">
-                      {parcel.raiserName}
-                    </h3>
-                    <p className="text-xs text-gov-muted truncate mt-0.5">
-                      {parcel.address} • Barangay {parcel.barangay}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Structured Key Properties Ledger */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                  <div className="border border-gov-line rounded p-2.5 bg-gov-canvas/40">
-                    <span className="text-[10px] uppercase font-bold text-gov-muted block">Rice Variety</span>
-                    <strong className="text-xs font-bold text-gov-ink block truncate mt-0.5">
-                      {parcel.breed || 'NSIC Rc 222'}
-                    </strong>
-                  </div>
-                  <div className="border border-gov-line rounded p-2.5 bg-gov-canvas/40">
-                    <span className="text-[10px] uppercase font-bold text-gov-muted block">Farm Area</span>
-                    <strong className="text-xs font-bold text-gov-ink block mt-0.5 tabular-nums">
-                      {parcel.weightKg || '1.25'} Hectares
-                    </strong>
-                  </div>
-                  <div className="border border-gov-line rounded p-2.5 bg-gov-canvas/40">
-                    <span className="text-[10px] uppercase font-bold text-gov-muted block">Projected Yield</span>
-                    <strong className="text-xs font-bold text-gov-green block mt-0.5 tabular-nums">
-                      {parcel.targetYieldMt || '6.00'} MT/ha
-                    </strong>
-                  </div>
-                  <div className="border border-gov-line rounded p-2.5 bg-gov-canvas/40">
-                    <span className="text-[10px] uppercase font-bold text-gov-muted block">Agro-Ecosystem</span>
-                    <span className="text-xs font-semibold text-gov-ink block truncate mt-0.5">
-                      {parcel.purpose || 'Irrigated Lowland (NIA)'}
-                    </span>
-                  </div>
-                  <div className="border border-gov-line rounded p-2.5 bg-gov-canvas/40">
-                    <span className="text-[10px] uppercase font-bold text-gov-muted block">RSBSA &amp; Insurance</span>
-                    <span className="text-xs font-semibold text-gov-ink block truncate mt-0.5">
-                      {parcel.vaccinationStatus || 'PCIC Enrolled'}
-                    </span>
-                  </div>
-                  <div className="border border-gov-line rounded p-2.5 bg-gov-canvas/40">
-                    <span className="text-[10px] uppercase font-bold text-gov-muted block">Assigned LFT</span>
-                    <span className="text-xs font-semibold text-gov-ink block truncate mt-0.5">
-                      {parcel.focalPerson || 'MAO Assigned'}
-                    </span>
-                  </div>
-                </div>
-
-                {parcel.irrigationAssociation && (
-                  <div className="bg-teal-50/70 border border-teal-200 p-2.5 rounded text-xs">
-                    <span className="text-[10px] uppercase font-bold text-teal-800 block">Irrigation Association (IA)</span>
-                    <span className="text-xs font-bold text-teal-950 block mt-0.5">
-                      {parcel.irrigationAssociation}
-                    </span>
+                {seasonalRecords.length === 0 ? (
+                  <p className="px-4 py-4 text-xs text-slate-600 sm:px-5">N/A · No planting or harvest records yet.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="border-y border-blue-100 bg-white text-[10px] font-semibold uppercase text-slate-600">
+                        <tr>
+                          <th scope="col" className="px-4 py-2">Season</th>
+                          <th scope="col" className="px-4 py-2">Variety / Seed Type</th>
+                          <th scope="col" className="px-4 py-2">Planting Date</th>
+                          <th scope="col" className="px-4 py-2">Harvest Date</th>
+                          <th scope="col" className="px-4 py-2 text-right">Production (MT)</th>
+                          <th scope="col" className="px-4 py-2 text-right">Yield (MT/ha)</th>
+                          <th scope="col" className="px-4 py-2 text-right">Gross Income</th>
+                          <th scope="col" className="px-4 py-2">Status</th>
+                          {canRecordHarvest && <th scope="col" className="px-4 py-2">Action</th>}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-slate-800">
+                        {seasonalRecords.map((record) => {
+                          const actual = hasActualProduction(record);
+                          return (
+                            <tr key={record.id} className="hover:bg-blue-50/50">
+                              <td className="px-4 py-2">{getRecordedCropValue(record.seasonName || record.season) || 'N/A'}</td>
+                              <td className="px-4 py-2">
+                                <div className="font-semibold">{getRecordedCropValue(record.seedVariety) || 'N/A'}</div>
+                                <div className="text-[10px] text-slate-600">{getRecordedCropValue(record.seedType) || 'N/A'}</div>
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-2">{record.plantingDate || 'N/A'}</td>
+                              <td className="whitespace-nowrap px-4 py-2">{record.actualHarvestDate || (actual ? record.harvestDate : '') || 'N/A'}</td>
+                              <td className="px-4 py-2 text-right tabular-nums">
+                                {actual ? record.actualProductionVolumeMt.toFixed(2) : 'N/A'}
+                                {actual && record.actualProductionBags != null && (
+                                  <div className="whitespace-nowrap text-[10px] text-slate-600">{record.actualProductionBags} bags</div>
+                                )}
+                              </td>
+                              <td className="px-4 py-2 text-right tabular-nums">{actual ? record.yieldMtPerHa.toFixed(2) : 'N/A'}</td>
+                              <td className="px-4 py-2 text-right tabular-nums">
+                                {actual && record.grossIncome != null ? `₱${record.grossIncome.toLocaleString()}` : 'N/A'}
+                              </td>
+                              <td className="px-4 py-2">{getRecordedCropValue(record.productionStatus) || 'N/A'}</td>
+                              {canRecordHarvest && (
+                                <td className="px-4 py-2">
+                                  <button type="button" onClick={() => {
+                                    setEditingRecord(record);
+                                    setSeasonalModalOpen(true);
+                                  }} className="font-semibold text-blue-700 hover:underline">Edit</button>
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 )}
-              </div>
-
-              {/* AUTOMATED PHENOLOGY & MATURITY CARD */}
-              <div className="p-4 bg-amber-50/60 border border-amber-300 rounded-2xl space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-200 pb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center text-xs font-bold shrink-0">
-                      ⚡
-                    </span>
-                    <div>
-                      <h4 className="text-xs font-black uppercase tracking-wider text-amber-950">
-                        Automated Crop Stage &amp; Maturity Detection
-                      </h4>
-                      <p className="text-[11px] text-amber-800">
-                        Calculated from seed variety <strong>{parcel.breed}</strong> and planting date <strong>{parcel.plantingDate || '2026-08-10'}</strong>
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 self-start sm:self-auto">
-                    Live Calculation
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="bg-white p-2.5 rounded-xl border border-amber-200">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Elapsed Days</span>
-                    <span className="text-sm font-black font-mono text-emerald-800">
-                      {growthCalc.dap >= 0 ? `${growthCalc.dap} Days (DAP)` : `${Math.abs(growthCalc.dap)}d to Sowing`}
-                    </span>
-                  </div>
-                  <div className="bg-white p-2.5 rounded-xl border border-amber-200">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Maturity Status</span>
-                    <span className="text-sm font-black font-mono text-amber-900">
-                      {growthCalc.percentageMaturity}% ({growthCalc.dap > 0 ? growthCalc.dap : 0}/{growthCalc.maturityDays}d)
-                    </span>
-                  </div>
-                  <div className="bg-white p-2.5 rounded-xl border border-amber-200">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Est. Harvest</span>
-                    <span className="text-sm font-black font-mono text-indigo-900">
-                      {growthCalc.estimatedHarvestDate}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Progress bar */}
-                <div>
-                  <div className="flex justify-between text-[10.5px] font-bold text-slate-600 mb-1">
-                    <span>Stage: <span className="text-emerald-800 font-extrabold">{growthCalc.stage}</span></span>
-                    <span>{growthCalc.percentageMaturity}% of {growthCalc.maturityDays} days maturity</span>
-                  </div>
-                  <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
-                    <div
-                      className="bg-emerald-600 h-full rounded-full transition-all duration-500"
-                      style={{ width: `${growthCalc.percentageMaturity}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className={`p-2.5 rounded-xl border text-xs leading-relaxed ${growthCalc.colorClass}`}>
-                  <strong>Agronomic Phase:</strong> {growthCalc.phase} — {growthCalc.description}
-                </div>
-              </div>
-
-              {/* Seasonal Production Summary Preview */}
-              <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-4 space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                      <Wheat className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-black uppercase tracking-wider text-emerald-950">
-                        Seasonal Harvest History ({seasonalRecords.length} Cropping Seasons)
-                      </h4>
-                      <p className="text-[11px] text-emerald-800">
-                        Total Recorded: <strong>{totalHarvestBags.toLocaleString()} Cavans</strong> ({totalHarvestMt.toFixed(2)} MT) &bull; Avg Yield: <strong>{avgYieldMt.toFixed(2)} MT/ha</strong>
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('harvest_history')}
-                      className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
-                    >
-                      <History className="w-3.5 h-3.5" />
-                      <span>View Full Harvest History</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingRecord(null);
-                        setSeasonalModalOpen(true);
-                      }}
-                      className="px-3 py-1.5 bg-white border border-emerald-300 hover:bg-emerald-50 text-emerald-800 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                    >
-                      <PlusCircle className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>+ Log Harvest</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Custom Form Fields Dossier */}
-              {customFieldEntries.length > 0 && (
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2.5">
-                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
-                    Additional Registry Form Details
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {customFieldEntries.map((item) => (
-                      <div key={item.id} className="bg-white border border-slate-200 rounded-xl px-3 py-2">
-                        <span className="text-[10px] font-bold uppercase text-slate-400 block truncate">
-                          {item.label}
-                        </span>
-                        <span className="text-xs font-semibold text-slate-800 block break-words">
-                          {item.value}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* GPS Coordinates Bar */}
-              <div className="p-3.5 bg-slate-900 text-white rounded-xl flex items-center justify-between gap-3 text-xs font-mono">
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>
-                    Lat: {formatCoords(latVal)}, Lng: {formatCoords(lngVal)}
-                  </span>
-                </div>
-                <span className="text-[10px] text-emerald-400 uppercase bg-emerald-950 px-2 py-0.5 rounded border border-emerald-500/30">
-                  {parcel.biosecurityScore}
-                </span>
-              </div>
-            </>
+              </section>
+            </article>
           )}
         </div>
 
@@ -794,7 +425,6 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
         </div>
       </div>
 
-      {/* LFT Seasonal Production Modal */}
       {seasonalModalOpen && (
         <SeasonalProductionModal
           isOpen={seasonalModalOpen}

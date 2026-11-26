@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useId } from 'react';
 import { X, Settings2, Upload, Loader2 } from 'lucide-react';
 import { OfficialSealsTrio } from './Seals';
 import { SafeImage } from './SafeImage';
-import { BARANGAYS } from '../data/barangays';
+import { BARANGAYS, getBarangayLabel } from '../data/barangays';
+import { useApp } from '../context/AppContext';
 import { RegistryField } from '../data/formSchema';
 
 export const OFFICE_LABEL_CLASS = 'block text-[11px] font-semibold text-[#34413a]';
@@ -291,11 +292,14 @@ export const OfficeCustomFieldsGrid: React.FC<OfficeCustomFieldsGridProps> = ({
   values,
   onChange
 }) => {
+  const { barangayProfiles } = useApp();
+  const idPrefix = useId();
   if (!fields || fields.length === 0) return null;
 
   return (
     <div className="pt-3 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
       {fields.map((field) => {
+        const inputId = `${idPrefix}-${field.id}`;
         const isFixed = field.valueBehavior === 'fixed' && Boolean(field.fixedValue);
         const currentValue = isFixed
           ? field.fixedValue || ''
@@ -306,13 +310,14 @@ export const OfficeCustomFieldsGrid: React.FC<OfficeCustomFieldsGridProps> = ({
             key={field.id}
             className={`space-y-1 ${field.fieldType === 'Text Area' ? 'sm:col-span-2' : ''}`}
           >
-            <label className={OFFICE_LABEL_CLASS}>
+            <label htmlFor={inputId} className={OFFICE_LABEL_CLASS}>
               {field.name}{' '}
               {field.required && <span className="text-red-600">*</span>}
             </label>
 
             {field.fieldType === 'Dropdown Menu' ? (
               <select
+                id={inputId}
                 required={field.required}
                 disabled={isFixed}
                 value={currentValue}
@@ -330,6 +335,7 @@ export const OfficeCustomFieldsGrid: React.FC<OfficeCustomFieldsGridProps> = ({
               </select>
             ) : field.fieldType === 'Barangay Selector' ? (
               <select
+                id={inputId}
                 required={field.required}
                 disabled={isFixed}
                 value={currentValue}
@@ -339,12 +345,13 @@ export const OfficeCustomFieldsGrid: React.FC<OfficeCustomFieldsGridProps> = ({
                 <option value="">{field.placeholder || 'Select Barangay...'}</option>
                 {BARANGAYS.map((b) => (
                   <option key={b.name} value={b.name}>
-                    {b.name}
+                    {getBarangayLabel(b.name, barangayProfiles)}
                   </option>
                 ))}
               </select>
             ) : field.fieldType === 'Text Area' ? (
               <textarea
+                id={inputId}
                 rows={2}
                 required={field.required}
                 readOnly={isFixed}
@@ -355,6 +362,7 @@ export const OfficeCustomFieldsGrid: React.FC<OfficeCustomFieldsGridProps> = ({
               />
             ) : (
               <input
+                id={inputId}
                 type={
                   field.fieldType === 'Date Field'
                     ? 'date'

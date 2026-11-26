@@ -64,8 +64,15 @@ export function isLegacyProductionEstimate(parcel: FarmParcel, record: SeasonalP
   return record.actualProductionVolumeMt === expected;
 }
 
+export function getRecordedCropValue(value?: string | null): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return /^(?:n\/a|not yet assigned|not recorded|unknown|[-—])$/i.test(text) ? '' : text;
+}
+
 export function getSeasonRecord(parcel: FarmParcel, season: string) {
-  return parcel.seasonalRecords?.find((record) => matchesSeasonFilter(record.season, season));
+  return parcel.seasonalRecords?.find((record) =>
+    season ? matchesSeasonFilter(record.season, season) : !record.season
+  );
 }
 
 export function hasActualProduction(record: Pick<SeasonalProductionRecord, 'productionStatus' | 'actualProductionVolumeMt'>) {
@@ -107,10 +114,10 @@ export function normalizeSeasonalRecord(
   defaultTag = 'PARCEL-001'
 ): SeasonalProductionRecord {
   const parcelTag = rec.parcelTag || defaultTag;
-  const originalSeason = rec.season || rec.seasonName || ACTIVE_SEASON;
+  const originalSeason = getRecordedCropValue(rec.season ?? rec.seasonName);
   const identity = getSeasonIdentity(originalSeason);
   const season = identity ? seasonLabel(identity.kind, identity.year) : originalSeason;
-  const seedVariety = rec.seedVariety || rec.varietyPlanted || 'Not recorded';
+  const seedVariety = getRecordedCropValue(rec.seedVariety ?? rec.varietyPlanted);
   const volumeMt = Number(rec.actualProductionVolumeMt ?? ((rec.actualProductionBags ?? rec.yieldBags ?? 0) / 20));
   const bags = Number(rec.actualProductionBags ?? rec.yieldBags ?? Math.round(volumeMt * 20));
   const yieldMt = Number(rec.yieldMtPerHa ?? rec.yieldMetricTons ?? 0);
@@ -119,13 +126,17 @@ export function normalizeSeasonalRecord(
   const status = (prodStatus === 'Standing Crop' ? 'Ongoing' : prodStatus === 'Crop Failure / Damaged' ? 'Damaged' : prodStatus === 'Not recorded' ? 'Not recorded' : 'Harvested');
 
   return {
-    id: rec.id || `PROD-${parcelTag}-${identity ? `${identity.year}${identity.kind === 'Wet' ? 'WS' : 'DS'}` : encodeURIComponent(season)}`,
+    id: rec.id || `PROD-${parcelTag}-${identity ? `${identity.year}${identity.kind === 'Wet' ? 'WS' : 'DS'}` : encodeURIComponent(season || 'unassigned')}`,
     parcelTag,
     season,
     seasonName: getShortSeasonName(season),
     seedVariety,
     varietyPlanted: seedVariety,
-    seedType: RICE_VARIETIES.find((variety) => variety.name.toLowerCase() === seedVariety.toLowerCase())?.seedType || rec.seedType || 'UNKNOWN',
+    seedType: rec.seedType ?? '',
+    ecosystem: rec.ecosystem,
+    irrigationAssociation: rec.irrigationAssociation,
+    tenure: rec.tenure,
+    targetYieldMt: rec.targetYieldMt,
     plantingDate: rec.plantingDate || '',
     estimatedHarvestDate: rec.estimatedHarvestDate || '',
     actualHarvestDate: rec.actualHarvestDate || (status === 'Harvested' ? harvestDate : undefined),

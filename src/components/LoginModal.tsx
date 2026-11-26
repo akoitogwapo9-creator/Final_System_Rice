@@ -2,6 +2,7 @@ import React, { useState, useEffect, useId } from 'react';
 import { useApp } from '../context/AppContext';
 import { User, isAccountActive } from '../types';
 import { OfficialSealsTrio } from './Seals';
+import { signInLftByUsername } from '../utils/staffAccounts';
 import { supabase } from '../supabase';
 import { DEFAULT_ADMIN_EMAIL, getVerifiedCentralAdmin, supabaseDb } from '../utils/supabaseClient';
 import {
@@ -105,15 +106,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
       const email = normalizedUsername.includes('@')
         ? normalizedUsername
         : ADMIN_USERNAMES.has(normalizedUsername) ? DEFAULT_ADMIN_EMAIL : matchedLft?.email;
-      if (!email?.trim()) {
-        setError('Sign in using the email address registered with your account.');
-        return;
-      }
-
-      const { data: auth, error: signInError } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
-        password
-      });
+      const { data: auth, error: signInError } = email?.trim()
+        ? await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
+        : await signInLftByUsername(normalizedUsername, password);
       if (signInError) {
         if (signInError.code === 'email_not_confirmed') {
           setError('Confirm the account email in Supabase before signing in.');
@@ -149,8 +144,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
       }
       resetLoginRateLimit();
       // The app resolves the authenticated session and role before opening the workspace.
-    } catch {
-      setError('Unable to sign in. Check your connection and try again.');
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Invalid username or password.') {
+        const wait = recordLoginFailure();
+        setError(wait > 0 ? `Too many failed attempts. Locked for ${wait}s.` : error.message);
+      } else {
+        setError('Unable to sign in. Check your connection and try again.');
+      }
     } finally {
       setIsSubmittingLogin(false);
     }

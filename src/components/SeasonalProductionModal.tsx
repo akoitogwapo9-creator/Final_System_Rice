@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FarmParcel, SeasonalProductionRecord } from '../types';
 import { useApp } from '../context/AppContext';
-import { computeEstimatedHarvestDate, computeYieldMtPerHa, getParcelSeasonOptions, getSeasonRecord, matchesSeasonFilter } from '../data/seasonalProduction';
-import { getAssignedLftForBarangay } from '../data/barangays';
+import { computeEstimatedHarvestDate, computeYieldMtPerHa, getParcelSeasonOptions, getRecordedCropValue, getSeasonRecord, matchesSeasonFilter } from '../data/seasonalProduction';
 import { calculateCropGrowthStage, SEED_TYPE_LABELS } from '../data/riceVarieties';
 import {
   X,
@@ -43,20 +42,20 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
     currentUser
   } = useApp();
 
-  const initialSeason = existingRecord?.season || defaultSeason || activeSeason;
+  const initialSeason = existingRecord?.season ?? (defaultSeason || activeSeason);
   const seasonOptions = getParcelSeasonOptions([farmer], seasons);
-  const resolveSeason = (value: string) => seasonOptions.find((season) => matchesSeasonFilter(value, season)) || value;
+  const resolveSeason = (value: string) => value ? seasonOptions.find((season) => matchesSeasonFilter(value, season)) || value : '';
   const [selectedSeason, setSelectedSeason] = useState<string>(
     resolveSeason(initialSeason)
   );
   const [seedVariety, setSeedVariety] = useState<string>(
-    existingRecord?.seedVariety || farmer.breed || 'NSIC Rc 222'
+    getRecordedCropValue(existingRecord?.seedVariety ?? farmer.breed)
   );
-  const [seedType, setSeedType] = useState<'INBRED' | 'HYBRID' | 'UNKNOWN'>(
-    existingRecord?.seedType || (farmer.seedType as any) || 'INBRED'
+  const [seedType, setSeedType] = useState<SeasonalProductionRecord['seedType']>(
+    existingRecord?.seedType ?? (getRecordedCropValue(farmer.seedType) as SeasonalProductionRecord['seedType'])
   );
   const [plantingDate, setPlantingDate] = useState<string>(
-    existingRecord?.plantingDate || farmer.plantingDate || new Date().toISOString().split('T')[0]
+    existingRecord?.plantingDate ?? (farmer.plantingDate || '')
   );
   const [estimatedHarvestDate, setEstimatedHarvestDate] = useState<string>(
     existingRecord?.estimatedHarvestDate || ''
@@ -70,12 +69,6 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
   const [productionStatus, setProductionStatus] = useState<
     'Standing Crop' | 'Harvest Completed' | 'Crop Failure / Damaged' | 'Not recorded'
   >(existingRecord?.productionStatus || 'Standing Crop');
-  const [lftOfficerName, setLftOfficerName] = useState<string>(
-    existingRecord?.lftOfficerName ||
-      currentUser?.name ||
-      farmer.focalPerson ||
-      getAssignedLftForBarangay(farmer.barangay).name
-  );
   const [remarks, setRemarks] = useState<string>(
     existingRecord?.remarks || ''
   );
@@ -121,18 +114,17 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
     if (!isOpen) return;
     const record = seasonRecord || (existingRecord && matchesSeasonFilter(existingRecord.season, selectedSeason) ? existingRecord : undefined);
     const hasLegacyCrop = matchesSeasonFilter(farmer.croppingSeason || farmer.season, selectedSeason) && Boolean(farmer.plantingDate);
-    const name = record?.seedVariety || (hasLegacyCrop ? farmer.breed : varieties[0]?.name) || '222';
+    const name = getRecordedCropValue(record?.seedVariety ?? (hasLegacyCrop ? farmer.breed : ''));
     const variety = varieties.find((item) => item.name.toLowerCase() === name.toLowerCase());
     const date = record?.plantingDate || (hasLegacyCrop ? farmer.plantingDate : '') || '';
     setSeedVariety(variety?.name || name);
-    setSeedType(variety?.seedType || record?.seedType || 'UNKNOWN');
+    setSeedType(record?.seedType ?? (hasLegacyCrop ? farmer.seedType as SeasonalProductionRecord['seedType'] : '') ?? '');
     setPlantingDate(date);
-    setEstimatedHarvestDate(record?.estimatedHarvestDate || computeEstimatedHarvestDate(date, name));
+    setEstimatedHarvestDate(record?.estimatedHarvestDate || (name ? computeEstimatedHarvestDate(date, name) : ''));
     setActualHarvestDate(record?.actualHarvestDate || '');
     setActualVolumeMt(record?.actualProductionVolumeMt ?? 0);
     setHarvestedAreaHa(record?.harvestedAreaHa ?? farmer.areaHa ?? farmer.weightKg);
     setProductionStatus(record?.productionStatus || 'Standing Crop');
-    setLftOfficerName(record?.lftOfficerName || currentUser?.name || farmer.focalPerson || getAssignedLftForBarangay(farmer.barangay).name);
     setRemarks(record?.remarks || '');
   }, [selectedSeason, seasonRecord, existingRecord, isOpen, farmer, currentUser, varieties]);
 
@@ -142,9 +134,9 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
     const recordPayload = {
       season: selectedSeason,
       seedVariety,
-      seedType: matchedVariety?.seedType || seedType,
+      seedType,
       plantingDate,
-      estimatedHarvestDate: estimatedHarvestDate || computeEstimatedHarvestDate(plantingDate, seedVariety),
+      estimatedHarvestDate: estimatedHarvestDate || (seedVariety ? computeEstimatedHarvestDate(plantingDate, seedVariety) : ''),
       actualHarvestDate: actualHarvestDate || undefined,
       harvestDate: actualHarvestDate || estimatedHarvestDate,
       grossIncome: computedBags * 1150,
@@ -157,7 +149,7 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
       growthStage: growth.stage,
       elapsedDas: growth.dap,
       maturityPercentage: growth.percentageMaturity,
-      lftOfficerName,
+      lftOfficerName: existingRecord?.lftOfficerName || seasonRecord?.lftOfficerName || currentUser?.name || '',
       remarks
     };
 
@@ -190,7 +182,7 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
             </div>
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-200 block">
-                LFT Seasonal Production Table • Master-Detail Entry
+                Seasonal Production Record
               </span>
               <h3 className="text-sm sm:text-base font-black leading-tight">
                 {seasonRecord ? 'Update Seasonal Production Record' : 'Record Seasonal Rice Production'}
@@ -221,7 +213,7 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
               {farmer.weightKg} Hectares
             </span>
             <span className="bg-sky-50 text-sky-800 px-2 py-0.5 rounded-md border border-sky-200 font-medium">
-              {farmer.sex || 'Owner-Cultivator'}
+              {getRecordedCropValue(farmer.sex) || 'N/A'}
             </span>
           </div>
         </div>
@@ -241,6 +233,7 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
                 onChange={(e) => setSelectedSeason(e.target.value)}
                 className="w-full px-3.5 py-2.5 bg-emerald-50/50 border border-emerald-300 rounded-xl text-xs text-slate-900 font-black focus:ring-2 focus:ring-emerald-600 cursor-pointer shadow-2xs"
               >
+                <option value="">-- Select / N/A --</option>
                 {seasonOptions.map((s) => (
                   <option key={s} value={s}>
                     {s}
@@ -260,7 +253,8 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
                   onChange={(e) => handleVarietyChange(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 font-bold focus:ring-2 focus:ring-emerald-600 cursor-pointer"
                 >
-                  {!matchedVariety && <option>{seedVariety}</option>}
+                  <option value="">-- Select / N/A --</option>
+                  {seedVariety && !matchedVariety && <option>{seedVariety}</option>}
                   {varieties.map((v) => (
                     <option key={v.name} value={v.name}>
                       {v.name} ({SEED_TYPE_LABELS[v.seedType]})
@@ -273,10 +267,10 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
                 <label className="text-[11px] font-bold text-slate-700">Seed Category</label>
                 <select
                   value={seedType}
-                  disabled={Boolean(matchedVariety)}
                   onChange={(e) => setSeedType(e.target.value as SeasonalProductionRecord['seedType'])}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 font-semibold focus:ring-2 focus:ring-emerald-600 cursor-pointer"
                 >
+                  <option value="">-- Select / N/A --</option>
                   <option value="INBRED">Inbred (RCEF)</option>
                   <option value="HYBRID">Hybrid</option>
                   <option value="UNKNOWN">UNKNOWN / Farmer-Saved Seeds</option>
@@ -426,20 +420,7 @@ export const SeasonalProductionModal: React.FC<SeasonalProductionModalProps> = (
               </div>
             </div>
 
-            {/* 6. LFT Officer & Remarks */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label className="text-[11px] font-bold text-slate-700">
-                  Recording LFT Technician
-                </label>
-                <input
-                  type="text"
-                  value={lftOfficerName}
-                  onChange={(e) => setLftOfficerName(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 font-medium focus:ring-2 focus:ring-emerald-600"
-                />
-              </div>
-
+            <div>
               <div className="space-y-1">
                 <label className="text-[11px] font-bold text-slate-700">
                   Seasonal Agronomic Remarks

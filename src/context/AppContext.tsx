@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { User, FarmParcel, Language, BackgroundPreset, LftAccount, SeasonalProductionRecord, OfficeContactInfo, PortalTab, MunicipalBrandingSettings, LandingPageConfig, MandateCardItem, GovernmentSubsidyProgram, SubsidyCategory, SubsidyClaimRecord, SubsidyHistoryEntry, isAccountActive } from '../types';
-import { BARANGAYS, BarangayProfiles, getAssignedLftForBarangay, isUserAuthorizedForBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
+import { BARANGAYS, BARANGAY_CLASSIFICATIONS, BarangayProfiles, getAssignedLftForBarangay, isUserAuthorizedForBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
 import { DEFAULT_BG_PHOTO, DEFAULT_SLSU_PHOTO, SLSU_DEFAULTS, PRESET_BACKGROUNDS } from '../data/photos';
 import { DEFAULT_SUBSIDY_PROGRAMS } from '../data/subsidies';
 import { RiceVariety, RICE_VARIETIES, mergeRequiredRiceVarieties } from '../data/riceVarieties';
@@ -24,6 +24,7 @@ import {
   getUserPermissions,
   canUserAddParcel,
   canUserEditParcel,
+  canUserRecordSeasonalProduction,
   canUserDeleteParcel,
   canUserManageLftAccounts,
   UserPermissions
@@ -31,8 +32,9 @@ import {
 import { LegalDecree, DEFAULT_LEGAL_DECREES, normalizeDecreeList } from '../data/legalDecrees';
 import {
   FORM_SCHEMA_STORAGE_KEY,
+  applyCloudFormSchema,
+  syncPendingFormSchema,
   PARCEL_CUSTOM_FIELDS_KEY,
-  FORM_SCHEMA_EVENT,
   PersistedFormSchema
 } from '../data/formSchema';
 import { setReportCustomLogoCache } from '../utils/reportExportUtils';
@@ -221,7 +223,6 @@ interface AppContextType {
 
   // LFT Officer Accounts Management
   lftAccounts: LftAccount[];
-  addLftAccount: (account: Omit<LftAccount, 'id'>) => Promise<boolean>;
   updateLftAccount: (id: string, updated: Partial<LftAccount>) => Promise<boolean>;
   deleteLftAccount: (id: string) => Promise<boolean>;
   resetLftAccounts: () => void;
@@ -442,6 +443,16 @@ function normalizeParcelNames(parcel: FarmParcel): FarmParcel {
 }
 
 const BARANGAY_PROFILES_KEY = 'silago_barangay_profiles';
+const PENDING_BARANGAY_PROFILES_KEY = 'silago_pending_barangay_profiles';
+const CROP_UPDATE_KEYS = new Set([
+  'seasonalRecords', 'breed', 'variety', 'seedType', 'croppingSeason', 'season', 'plantingDate',
+  'targetYieldMt', 'harvestDate', 'healthStatus', 'standingCropStage', 'ageMonths',
+  'purpose', 'ecosystem', 'irrigationAssociation', 'sex', 'tenure', 'customFields'
+]);
+
+function readBarangayProfiles(key: string): BarangayProfiles {
+  try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch { return {}; }
+}
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -451,20 +462,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
 }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-  const [barangayProfiles, setBarangayProfiles] = useState<BarangayProfiles>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(BARANGAY_PROFILES_KEY) || '{}') || {};
-    } catch {
-      return {};
-    }
-  });
+  const [barangayProfiles, setBarangayProfiles] = useState<BarangayProfiles>(() => ({
+    ...readBarangayProfiles(BARANGAY_PROFILES_KEY), ...readBarangayProfiles(PENDING_BARANGAY_PROFILES_KEY)
+  }));
+  const pendingBarangayProfiles = useRef(readBarangayProfiles(PENDING_BARANGAY_PROFILES_KEY));
+  const profileSync = useRef<Promise<boolean> | null>(null);
 
   const applyBarangayProfiles = useCallback((profiles: BarangayProfiles) => {
-    setBarangayProfiles(profiles);
-    try {
-      localStorage.setItem(BARANGAY_PROFILES_KEY, JSON.stringify(profiles));
-    } catch {}
+    const merged = { ...profiles, ...pendingBarangayProfiles.current };
+    setBarangayProfiles(merged);
+    try { localStorage.setItem(BARANGAY_PROFILES_KEY, JSON.stringify(merged)); } catch {}
   }, []);
+
+  const flushBarangayProfiles = useCallback(async (): Promise<boolean> => {
+    if (currentUser?.role !== 'Central Admin' || !navigator.onLine) return false;
+    if (profileSync.current) {
+      if (!await profileSync.current.catch(() => false)) return false;
+      if (!Object.keys(pendingBarangayProfiles.current).length) return true;
+      return flushBarangayProfiles();
+    }
+    if (!Object.keys(pendingBarangayProfiles.current).length) return true;
+
+    const save = async () => {
+      const pending = { ...pendingBarangayProfiles.current };
+      const remote = await supabaseDb.getSetting<BarangayProfiles>(BARANGAY_PROFILES_KEY);
+      const merged = { ...(remote ?? readBarangayProfiles(BARANGAY_PROFILES_KEY)), ...pending };
+      if (!await supabaseDb.setSetting(BARANGAY_PROFILES_KEY, merged)) return false;
+      for (const [key, profile] of Object.entries(pending)) {
+        if (pendingBarangayProfiles.current[key] === profile) delete pendingBarangayProfiles.current[key];
+      }
+      try { localStorage.setItem(PENDING_BARANGAY_PROFILES_KEY, JSON.stringify(pendingBarangayProfiles.current)); } catch {}
+      applyBarangayProfiles(merged);
+      return true;
+    };
+
+    profileSync.current = save();
+    try { return await profileSync.current; } catch { return false; } finally { profileSync.current = null; }
+  }, [applyBarangayProfiles, currentUser?.role]);
 
   useEffect(() => {
     let active = true;
@@ -474,13 +508,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     return () => { active = false; };
   }, [applyBarangayProfiles]);
 
+  useEffect(() => {
+    const sync = () => { void flushBarangayProfiles(); };
+    window.addEventListener('online', sync);
+    sync();
+    return () => window.removeEventListener('online', sync);
+  }, [flushBarangayProfiles]);
+
+  useEffect(() => {
+    if (currentUser?.role !== 'Central Admin') return;
+    const sync = () => { void syncPendingFormSchema(); };
+    window.addEventListener('online', sync);
+    sync();
+    return () => window.removeEventListener('online', sync);
+  }, [currentUser?.role]);
+
   const updateBarangayProfile = async (name: string, profile: BarangayProfiles[string]) => {
     if (currentUser?.role !== 'Central Admin' || !OFFICIAL_15_BARANGAYS.some((item) => item === name)) return false;
     const displayName = profile.displayName.trim();
-    if (!displayName || (profile.classification !== 'Coastal' && profile.classification !== 'Upland')) return false;
-    const next = { ...barangayProfiles, [name]: { ...profile, displayName } };
-    applyBarangayProfiles(next);
-    return supabaseDb.setSetting(BARANGAY_PROFILES_KEY, next);
+    const typedZone = profile.classification.trim();
+    const classification = BARANGAY_CLASSIFICATIONS.find((zone) => zone.toLowerCase() === typedZone.toLowerCase()) || typedZone;
+    if (!displayName || !classification || classification.length > 60) return false;
+    pendingBarangayProfiles.current[name] = { displayName, classification };
+    try { localStorage.setItem(PENDING_BARANGAY_PROFILES_KEY, JSON.stringify(pendingBarangayProfiles.current)); } catch {}
+    applyBarangayProfiles(barangayProfiles);
+    return flushBarangayProfiles();
   };
 
   // Active Navigation Tab State (persisted per session in sessionStorage & URL state)
@@ -881,10 +933,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       try { localStorage.setItem('silago_subsidy_history', JSON.stringify(value)); } catch {}
     }
     else if (key === FORM_SCHEMA_STORAGE_KEY && value && typeof value === 'object') {
-      try {
-        localStorage.setItem(FORM_SCHEMA_STORAGE_KEY, JSON.stringify(value));
-        window.dispatchEvent(new CustomEvent(FORM_SCHEMA_EVENT, { detail: value }));
-      } catch {}
+      applyCloudFormSchema(value);
     }
     else if (key === PARCEL_CUSTOM_FIELDS_KEY && value && typeof value === 'object') {
       try {
@@ -1229,7 +1278,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   const updateParcel = async (tagNumber: string, updatedFields: Partial<FarmParcel>) => {
     const existing = parcels.find((p) => p.tagNumber === tagNumber);
     if (existing) {
-      if (!canUserEditParcel(currentUser, existing)) {
+      const canUpdateCrop = !!updatedFields.seasonalRecords &&
+        Object.keys(updatedFields).every((key) => CROP_UPDATE_KEYS.has(key)) &&
+        canUserRecordSeasonalProduction(currentUser, existing.barangay);
+      if (!canUserEditParcel(currentUser, existing) && !canUpdateCrop) {
         throw new Error('Unauthorized: You do not have permission to modify this farm parcel record.');
       }
       const targetUpdated = normalizeParcelNames({ ...existing, ...updatedFields });
@@ -1304,10 +1356,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     recordId?: string
   ) => {
     const parcel = parcels.find((item) => item.tagNumber === parcelTag);
-    if (!parcel || !canUserEditParcel(currentUser, parcel)) return;
+    if (!parcel || !canUserRecordSeasonalProduction(currentUser, parcel.barangay)) return;
     const records = parcel.seasonalRecords || [];
     const existing = records.find((item) =>
-      recordId ? item.id === recordId : matchesSeasonFilter(item.season, fields.season || '')
+      recordId ? item.id === recordId : (fields.season ? matchesSeasonFilter(item.season, fields.season) : !item.season)
     );
     const record = normalizeSeasonalRecord({ ...existing, ...fields, parcelTag }, parcelTag);
     const seasonalRecords = [record, ...records.filter((item) => item.id !== existing?.id)]
@@ -1347,22 +1399,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
 
   const deleteSeasonalRecord = (parcelTag: string, recordId: string) => {
     const parcel = parcels.find((item) => item.tagNumber === parcelTag);
-    if (!parcel || !canUserEditParcel(currentUser, parcel)) return;
+    if (!parcel || !canUserRecordSeasonalProduction(currentUser, parcel.barangay)) return;
     void updateParcel(parcelTag, {
       seasonalRecords: (parcel.seasonalRecords || []).filter((record) => record.id !== recordId)
     });
-  };
-
-  const addLftAccount = async (accountData: Omit<LftAccount, 'id'>) => {
-    if (!canUserManageLftAccounts(currentUser)) return false;
-    const account: LftAccount = { ...accountData, id: crypto.randomUUID() };
-    try {
-      await supabaseDb.upsertLftAccount(account);
-      setLftAccounts((prev) => [account, ...prev.filter((item) => item.id !== account.id)]);
-      return true;
-    } catch {
-      return false;
-    }
   };
 
   const updateLftAccount = async (id: string, updates: Partial<LftAccount>) => {
@@ -2599,12 +2639,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
           setSubsidyHistoryState(cloudSubsidyHistory);
           try { localStorage.setItem('silago_subsidy_history', JSON.stringify(cloudSubsidyHistory)); } catch {}
         }
-        if (cloudFormSchema && typeof cloudFormSchema === 'object' && Array.isArray(cloudFormSchema.sections) && Array.isArray(cloudFormSchema.fields)) {
-          try {
-            localStorage.setItem(FORM_SCHEMA_STORAGE_KEY, JSON.stringify(cloudFormSchema));
-            window.dispatchEvent(new CustomEvent(FORM_SCHEMA_EVENT, { detail: cloudFormSchema }));
-          } catch {}
-        }
+        if (cloudFormSchema) applyCloudFormSchema(cloudFormSchema);
         if (cloudParcelCustomFields && typeof cloudParcelCustomFields === 'object') {
           try {
             localStorage.setItem(PARCEL_CUSTOM_FIELDS_KEY, JSON.stringify(cloudParcelCustomFields));
@@ -2622,6 +2657,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     };
   }, []);
 
+  const scopedParcels = useMemo(() => currentUser?.role === 'Barangay Focal Person'
+    ? parcels.filter((parcel) => isUserAuthorizedForBarangay(currentUser, parcel.barangay))
+    : parcels, [currentUser, parcels]);
+
   return (
     <AppContext.Provider
       value={{
@@ -2631,14 +2670,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         setCurrentUser,
         updateCurrentUserProfile,
         updateCurrentUserPassword,
-        parcels,
+        parcels: scopedParcels,
         addParcel,
         updateParcel,
         deleteParcel,
         deleteBulkParcels,
         resetParcels,
         lftAccounts,
-        addLftAccount,
         updateLftAccount,
         deleteLftAccount,
         resetLftAccounts,

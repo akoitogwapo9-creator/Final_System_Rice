@@ -1,24 +1,8 @@
 import { Barangay, User } from '../types';
 import rawBarangays from '../data_barangays.json';
 
-// Official 15 Barangays of Silago, Southern Leyte
-export const OFFICIAL_15_BARANGAYS = [
-  'Balagawan',
-  'Catmon',
-  'Calubian',
-  'Hingatungan',
-  'Imelda',
-  'Katipunan',
-  'Laguna',
-  'Mercedes',
-  'Poblacion District 1',
-  'Poblacion District 2',
-  'Puntana',
-  'Salvacion',
-  'San Isidro',
-  'San Roque',
-  'Sap-ang'
-] as const;
+import { OFFICIAL_15_BARANGAYS } from './officialBarangayNames';
+export { OFFICIAL_15_BARANGAYS } from './officialBarangayNames';
 
 export type OfficialBarangay = typeof OFFICIAL_15_BARANGAYS[number];
 
@@ -62,7 +46,14 @@ export const UPLAND_BARANGAYS: OfficialBarangay[] = [
   'San Isidro'
 ];
 
-export type BarangayClassification = 'Coastal' | 'Upland';
+export const BARANGAY_CLASSIFICATIONS = [
+  'Coastal', 'Upland', 'Lowland / Plain', 'Poblacion / Urban', 'Island / Riverside'
+] as const;
+export type BarangayClassification = string;
+
+export function getBarangayClassifications(profiles: BarangayProfiles): string[] {
+  return [...new Set([...BARANGAY_CLASSIFICATIONS, ...OFFICIAL_15_BARANGAYS.map((name) => getBarangayZone(name, profiles))])];
+}
 export type BarangayProfiles = Record<string, { displayName: string; classification: BarangayClassification }>;
 
 export function getBarangayLabel(name: string, profiles: BarangayProfiles): string {
@@ -71,7 +62,7 @@ export function getBarangayLabel(name: string, profiles: BarangayProfiles): stri
 
 export function getBarangayZone(name: string, profiles?: BarangayProfiles): BarangayClassification {
   const saved = profiles?.[getDisplayBarangay(name)]?.classification;
-  if (saved === 'Coastal' || saved === 'Upland') return saved;
+  if (saved?.trim()) return saved.trim();
   const norm = (name || '').trim().toLowerCase();
   if (UPLAND_BARANGAYS.some((b) => b.toLowerCase() === norm || norm.includes(b.toLowerCase()))) {
     return 'Upland';
@@ -237,10 +228,10 @@ export function matchBarangay(recordBarangay: string, targetBarangay: string): b
  */
 export function getDisplayBarangay(name: string): string {
   if (!name) return '';
-  const clean = name.trim();
+  const clean = name.trim().replace(/^(?:brgy\.?|barangay)\s+/i, '');
   const lower = clean.toLowerCase();
-  if (lower === 'pd1' || lower.includes('poblacion district 1') || lower === 'pob1' || lower === 'poblacion 1') return 'Poblacion District 1';
-  if (lower === 'pd2' || lower.includes('poblacion district 2') || lower === 'pob2' || lower === 'poblacion 2') return 'Poblacion District 2';
+  if (lower === 'pd1' || lower.includes('poblacion district 1') || lower === 'pob1' || lower === 'poblacion 1' || lower === 'poblacion district i' || lower === 'pob. district i') return 'Poblacion District 1';
+  if (lower === 'pd2' || lower.includes('poblacion district 2') || lower === 'pob2' || lower === 'poblacion 2' || lower === 'poblacion district ii' || lower === 'pob. district ii') return 'Poblacion District 2';
   if (lower === 'sap-ang' || lower === 'sapang' || lower.includes('sap-ang')) return 'Sap-ang';
   if (lower.includes('salvacion')) return 'Salvacion';
   if (lower === 'laguma' || lower.includes('laguna') || lower.includes('lagu')) return 'Laguna';
@@ -270,9 +261,9 @@ export function getUserAssignedBarangays(user: User | null | undefined): string[
       return user.assignedBarangays;
     }
     if (user.barangay) {
-      return [user.barangay];
+      return user.barangay.split(',').map((name) => name.trim()).filter(Boolean);
     }
-    return [...ASSIGNED_10_BARANGAYS];
+    return [];
   }
   return [];
 }
@@ -286,6 +277,7 @@ export function isUserAuthorizedForBarangay(user: User | null | undefined, baran
   if (user.role === 'Central Admin') return true;
   const assigned = getUserAssignedBarangays(user);
   if (!assigned) return true; // Admin
-  return assigned.some((b) => matchBarangay(barangayName, b));
+  const key = getDisplayBarangay(barangayName).toLowerCase();
+  return Boolean(key && assigned.some((b) => getDisplayBarangay(b).toLowerCase() === key));
 }
 

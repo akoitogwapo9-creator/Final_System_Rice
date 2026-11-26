@@ -46,13 +46,19 @@ git push -u origin main
    `INSERT INTO public.admin_accounts` statement again.
 3. In **Authentication → URL Configuration**, add the deployed
    `/reset-password` URL to **Redirect URLs**.
-4. Create or invite each LFT in **Authentication → Users** using the same
-   email as their **LFT Accounts** roster entry. Officers sign in using that
-   email. Existing phone-only Auth users need their UUID linked in
-   `lft_technicians.auth_user_id` for role lookup.
+4. Apply the [LFT account scope migration](supabase/migrations/202611260003_lft_account_scope.sql).
+   It keeps existing officer records and restricts signed-in LFT parcel access
+   to each officer’s assigned barangays.
+5. Set `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) as a **server-only**
+   environment variable for the deployment. Use the same project for the server
+   and client Supabase URL and publishable key.
+6. In **User Accounts**, enter the officer’s username, email, initial password,
+   and barangays. The app creates the Auth user and roster link together. The
+   officer can then sign in with the username or email.
 
-Staff tables store profiles and assignments. Supabase Auth manages passwords
-and password reset emails.
+Existing Auth users retain their credentials. Existing phone-only identities
+need their UUID linked in `lft_technicians.auth_user_id` for role lookup.
+Staff tables store profiles and assignments. Supabase Auth manages passwords.
 
 ---
 

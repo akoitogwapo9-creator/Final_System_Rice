@@ -169,7 +169,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       return liveBarangays.filter((b) => getBarangayZone(b.name, barangayProfiles) === 'Coastal');
     }
     if (barangayFilter === 'INLAND') {
-      return liveBarangays.filter((b) => getBarangayZone(b.name, barangayProfiles) === 'Upland');
+      return liveBarangays.filter((b) => getBarangayZone(b.name, barangayProfiles) !== 'Coastal');
     }
     return liveBarangays;
   }, [barangayFilter, liveBarangays, barangayProfiles]);

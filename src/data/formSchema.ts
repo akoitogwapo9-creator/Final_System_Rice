@@ -429,23 +429,61 @@ export function loadFormSchema(): PersistedFormSchema {
  * Persists customized form schema locally, notifies live open modals/forms,
  * and syncs to Supabase `app_settings` so staff workspaces reflect changes immediately.
  */
-export function saveFormSchema(
+const PENDING_FORM_SCHEMA_KEY = 'silago_pending_form_schema_v3';
+let pendingSchemaSync: Promise<boolean> | null = null;
+
+export function applyCloudFormSchema(payload: PersistedFormSchema): void {
+  if (!Array.isArray(payload?.sections) || !Array.isArray(payload?.fields)) return;
+  try {
+    if (!localStorage.getItem(PENDING_FORM_SCHEMA_KEY)) writeLocalFormSchema(payload);
+  } catch {}
+}
+
+function writeLocalFormSchema(payload: PersistedFormSchema) {
+  localStorage.setItem(FORM_SCHEMA_STORAGE_KEY, JSON.stringify(payload));
+  window.dispatchEvent(new CustomEvent(FORM_SCHEMA_EVENT, { detail: payload }));
+}
+
+export async function syncPendingFormSchema(): Promise<boolean> {
+  if (typeof window === 'undefined' || !navigator.onLine) return false;
+  if (pendingSchemaSync && !await pendingSchemaSync) return false;
+  try {
+    const pending = localStorage.getItem(PENDING_FORM_SCHEMA_KEY);
+    if (!pending) return true;
+    if (pendingSchemaSync) return pendingSchemaSync;
+
+    pendingSchemaSync = (async () => {
+      try {
+        const synced = await supabaseDb.setSetting(FORM_SCHEMA_STORAGE_KEY, JSON.parse(pending));
+        if (synced && localStorage.getItem(PENDING_FORM_SCHEMA_KEY) === pending) {
+          localStorage.removeItem(PENDING_FORM_SCHEMA_KEY);
+        }
+        return synced;
+      } catch {
+        return false;
+      } finally {
+        pendingSchemaSync = null;
+      }
+    })();
+    return await pendingSchemaSync;
+  } catch {
+    return false;
+  }
+}
+
+export async function saveFormSchema(
   sections: RegistryFormSection[],
   fields: RegistryField[],
   syncToCloud = true
-): void {
+): Promise<boolean> {
   const payload: PersistedFormSchema = { sections, fields };
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(FORM_SCHEMA_STORAGE_KEY, JSON.stringify(payload));
-      window.dispatchEvent(new CustomEvent(FORM_SCHEMA_EVENT, { detail: payload }));
-    } catch {}
+  try {
+    if (syncToCloud) localStorage.setItem(PENDING_FORM_SCHEMA_KEY, JSON.stringify(payload));
+    writeLocalFormSchema(payload);
+  } catch {
+    return false;
   }
-  if (syncToCloud) {
-    try {
-      supabaseDb.setSetting(FORM_SCHEMA_STORAGE_KEY, payload);
-    } catch {}
-  }
+  return syncToCloud ? syncPendingFormSchema() : true;
 }
 
 /**
@@ -557,6 +595,10 @@ export function useRegistryFormSchema() {
     getField,
     isVisible,
     isRequired,
+    getFieldOrder: (id: string) => {
+      const index = schema.fields.findIndex((field) => field.id === id);
+      return index >= 0 ? index : undefined;
+    },
     getLabel,
     getPlaceholder,
     getHelpText,

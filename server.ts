@@ -1,3 +1,4 @@
+import staffAccounts from './api/staff-accounts.ts';
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -24,6 +25,7 @@ app.use((_req, res, next) => {
 });
 
 app.use(express.json({ limit: '2mb' }));
+app.post('/api/staff-accounts', staffAccounts);
 
 // Helper to initialize server-side Gemini client
 const getGeminiClient = () => {

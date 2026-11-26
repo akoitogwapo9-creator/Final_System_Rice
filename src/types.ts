@@ -22,7 +22,11 @@ export interface SeasonalProductionRecord {
   seasonName?: string; // e.g. "Dry Season (DS) 2025", "Wet Season (WS) 2025"
   seedVariety: string; // e.g. "NSIC Rc 222", "NSIC Rc 488H"
   varietyPlanted?: string; // alias for seedVariety (e.g. "NSIC Rc 222")
-  seedType: 'INBRED' | 'HYBRID' | 'UNKNOWN';
+  seedType: 'INBRED' | 'HYBRID' | 'UNKNOWN' | '';
+  ecosystem?: string;
+  irrigationAssociation?: string;
+  tenure?: string;
+  targetYieldMt?: number | null;
   plantingDate: string; // YYYY-MM-DD
   estimatedHarvestDate: string; // YYYY-MM-DD (calculated based on variety maturity)
   actualHarvestDate?: string; // YYYY-MM-DD
@@ -75,7 +79,7 @@ export interface FarmParcel {
   lat: number;
   lng: number;
   syncStatus: string;
-  targetYieldMt: number; // Projected yield in Metric Tons
+  targetYieldMt?: number; // Projected yield in Metric Tons
   boundaryCoords?: [number, number][]; // GPS polygon boundary vertices [[lat, lng], ...]
   plantingDate?: string; // Date of Planting / Transplanting (e.g. 2026-08-10)
   croppingSeason?: string; // e.g. Wet Season (WS) 2026 (June – Nov 2026)
@@ -134,6 +138,7 @@ export interface OfficialSignatory {
 
 export interface LftAccount {
   id: string;
+  authUserId?: string;
   name: string;
   barangay: string;
   assignedBarangays?: string[];

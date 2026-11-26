@@ -1,20 +1,20 @@
+import { isVerifiedAdminEmail } from './adminIdentity';
 import { SupabaseClient, RealtimeChannel, type User as SupabaseAuthUser } from '@supabase/supabase-js';
 import { supabase as sharedSupabaseClient, memoryAuthStorage } from '../supabase';
 import { FarmParcel, LftAccount, User } from '../types';
-import { isLegacyProductionEstimate, normalizeSeasonalRecord, ACTIVE_SEASON } from '../data/seasonalProduction';
+import { getRecordedCropValue, hasActualProduction, isLegacyProductionEstimate, normalizeSeasonalRecord, seasonOrder } from '../data/seasonalProduction';
 
 export { memoryAuthStorage };
 
 // Shared official Supabase JS client instance (session-scoped auth storage)
 export const supabaseClient: SupabaseClient = sharedSupabaseClient;
 
-export const DEFAULT_ADMIN_EMAIL = 'admin@gmail.com';
-const CENTRAL_ADMIN_EMAILS = new Set([DEFAULT_ADMIN_EMAIL, 'akoitogwapo9@gmail.com']);
+export { DEFAULT_ADMIN_EMAIL } from './adminIdentity';
 
 // Use only an identity returned by Supabase Auth, never the submitted username or user metadata.
 export function getVerifiedCentralAdmin(authUser: SupabaseAuthUser): User | null {
   const email = authUser.email?.trim().toLowerCase();
-  if (!email || authUser.is_anonymous || !authUser.email_confirmed_at || !CENTRAL_ADMIN_EMAILS.has(email)) {
+  if (!isVerifiedAdminEmail(authUser)) {
     return null;
   }
 
@@ -157,7 +157,7 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     'NO RSBSA'
   ).trim();
   const commodity = row.commodity || row.commodity_planted || row.commodityPlanted || 'Rice';
-  const season = row.season || row.croppingSeason || row.cropping_season || ACTIVE_SEASON;
+  const season = getRecordedCropValue(row.season ?? row.croppingSeason ?? row.cropping_season);
   const fieldPhotoUrl = row.field_photo_url || row.fieldPhotoUrl || '';
   const photoUrl = row.photo_url || row.photoUrl || row.farmer_photo_url || row.farmerPhotoUrl || '';
 
@@ -203,32 +203,34 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     weightKg: areaHa,
     areaHa,
     farm_area_ha: areaHa,
-    sex: row.sex || row.tenure || row.tenurial_status || 'Owner-Cultivator',
-    ageMonths: Number(row.ageMonths ?? row.age_months ?? 45),
+    sex: getRecordedCropValue(row.sex ?? row.tenure ?? row.tenurial_status),
+    ageMonths: Number(row.ageMonths ?? row.age_months ?? 0),
     scale: row.scale || (areaHa < 2 ? 'Smallholder (<2 ha)' : areaHa <= 5 ? 'Medium Farm (2-5 ha)' : 'Commercial (>5 ha)'),
-    purpose: row.ecosystem || row.purpose || 'Irrigated Lowland',
+    purpose: getRecordedCropValue(row.ecosystem ?? row.purpose),
     vaccinationStatus: row.vaccinationStatus || row.vaccination_status || 'RSBSA Enrolled & PCIC Insured',
-    healthStatus: row.healthStatus || row.health_status || row.standingCropStage || 'Active Crop (Tillering)',
+    healthStatus: row.healthStatus || row.health_status || row.standingCropStage || 'Not recorded',
     biosecurityScore: row.biosecurityScore || row.biosecurity_score || 'Georeferenced (GPS Polygon Mapped)',
     registrationDate: row.registrationDate || row.registration_date || row.createdAt || row.created_at || new Date().toISOString().split('T')[0],
     syncStatus: isPendingSync ? 'Offline / Pending Sync' : (row.syncStatus || row.sync_status || 'Live Synced'),
     is_pending_sync: isPendingSync,
     isPendingSync,
-    targetYieldMt: Number(row.targetYieldMt ?? row.target_yield_mt ?? 6.0),
+    targetYieldMt: row.targetYieldMt != null || row.target_yield_mt != null
+      ? Number(row.targetYieldMt ?? row.target_yield_mt) : undefined,
     commodity,
     commodity_planted: commodity,
-    breed: row.seed_variety || row.breed || row.variety || 'NSIC Rc 222',
-    variety: row.seed_variety || row.variety || row.breed || 'NSIC Rc 222',
-    seedType: row.seedType || row.seed_type || 'INBRED',
-    ecosystem: row.ecosystem || row.purpose || 'Irrigated Lowland',
-    tenure: row.tenure || row.sex || 'Owner-Cultivator',
-    focalPerson: row.focalPerson || row.focal_person || row.technician || 'MAO Assigned LFT',
-    standingCropStage: row.standingCropStage || row.standing_crop_stage || 'Vegetative',
+    breed: getRecordedCropValue(row.seed_variety ?? row.breed ?? row.variety),
+    variety: getRecordedCropValue(row.seed_variety ?? row.variety ?? row.breed),
+    seedType: getRecordedCropValue(row.seedType ?? row.seed_type),
+    ecosystem: getRecordedCropValue(row.ecosystem ?? row.purpose),
+    tenure: getRecordedCropValue(row.tenure ?? row.sex ?? row.tenurial_status),
+    focalPerson: row.focalPerson || row.focal_person || row.technician || '',
+    standingCropStage: row.standingCropStage || row.standing_crop_stage || '',
     plantingDate: row.plantingDate || row.planting_date || '',
     harvestDate: row.harvestDate || row.harvest_date || '',
     croppingSeason: season,
     season,
-    waterSource: row.waterSource || row.water_source || 'NIA-RIS Irrigated',
+    waterSource: row.waterSource || row.water_source || '',
+    irrigationAssociation: getRecordedCropValue(row.irrigationAssociation ?? row.irrigation_association),
     photoUrl,
     photo_url: photoUrl,
     fieldPhotoUrl,
@@ -242,6 +244,25 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
   };
 
   parcel.seasonalRecords = parcel.seasonalRecords?.filter((record) => !isLegacyProductionEstimate(parcel, record));
+  const latest = [...(parcel.seasonalRecords || [])].sort((a, b) => seasonOrder(b.season) - seasonOrder(a.season))[0];
+  if (latest && seasonOrder(latest.season) >= seasonOrder(season)) {
+    parcel.breed = parcel.variety = latest.seedVariety;
+    parcel.seedType = latest.seedType;
+    parcel.croppingSeason = parcel.season = latest.season;
+    parcel.plantingDate = latest.plantingDate;
+    parcel.harvestDate = latest.harvestDate || '';
+    if (latest.tenure !== undefined) parcel.tenure = parcel.sex = latest.tenure;
+    if (latest.ecosystem !== undefined) parcel.ecosystem = parcel.purpose = latest.ecosystem;
+    if (latest.irrigationAssociation !== undefined) parcel.irrigationAssociation = latest.irrigationAssociation;
+    if (latest.targetYieldMt !== undefined) parcel.targetYieldMt = latest.targetYieldMt ?? undefined;
+  } else if (!latest && !parcel.plantingDate && !parcel.harvestDate &&
+      (/^not yet assigned$/i.test(String(row.seed_variety ?? row.breed ?? row.variety ?? '')) ||
+       parcel.healthStatus === 'Registered (Pending Crop Form)')) {
+    // Earlier registration forms saved crop defaults for these unplanted parcels.
+    parcel.breed = parcel.variety = parcel.seedType = parcel.croppingSeason = parcel.season = '';
+    parcel.sex = parcel.tenure = parcel.purpose = parcel.ecosystem = parcel.irrigationAssociation = '';
+    parcel.targetYieldMt = undefined;
+  }
   return parcel;
 }
 
@@ -265,6 +286,7 @@ export function normalizeLftAccount(row: any): LftAccount {
 
   return {
     id,
+    authUserId: row.auth_user_id || row.authUserId || undefined,
     name: row.name || row.full_name || 'LFT Technician',
     barangay: row.barangay || (assigned.length > 0 ? assigned.join(', ') : 'Silago'),
     assignedBarangays: assigned,
@@ -979,11 +1001,11 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
     address: exactAddress,
     purok: norm.purok || '',
     birthday: norm.birthday || null,
-    variety: norm.variety || norm.breed || 'NSIC Rc 222 (Tubigan 18)',
-    seed_type: norm.seedType || 'INBRED',
-    ecosystem: norm.ecosystem || norm.purpose || 'Irrigated Lowland (NIA)',
-    tenure: norm.tenure || norm.sex || 'Owner-Cultivator',
-    cropping_season: norm.croppingSeason || norm.season || ACTIVE_SEASON,
+    variety: norm.variety || norm.breed || null,
+    seed_type: norm.seedType || null,
+    ecosystem: norm.ecosystem || norm.purpose || null,
+    tenure: norm.tenure || norm.sex || null,
+    cropping_season: norm.croppingSeason || norm.season || null,
     planting_date: norm.plantingDate || null,
     harvest_date: norm.harvestDate || null,
     photo_url: safePhotoUrl,
@@ -995,18 +1017,22 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
       seasonName: r.seasonName || r.season,
       seedVariety: r.seedVariety,
       varietyPlanted: r.varietyPlanted || r.seedVariety,
-      seedType: r.seedType || 'INBRED',
+      seedType: r.seedType,
+      ecosystem: r.ecosystem,
+      irrigationAssociation: r.irrigationAssociation,
+      tenure: r.tenure,
+      targetYieldMt: r.targetYieldMt,
       plantingDate: r.plantingDate,
       estimatedHarvestDate: r.estimatedHarvestDate,
       actualHarvestDate: r.actualHarvestDate,
       harvestDate: r.harvestDate || r.actualHarvestDate || r.estimatedHarvestDate,
       harvestedAreaHa: r.harvestedAreaHa,
-      actualProductionVolumeMt: r.actualProductionVolumeMt,
-      actualProductionBags: r.actualProductionBags || r.yieldBags,
-      yieldBags: r.yieldBags || r.actualProductionBags,
-      yieldMtPerHa: r.yieldMtPerHa || r.yieldMetricTons,
-      yieldMetricTons: r.yieldMetricTons || r.yieldMtPerHa,
-      grossIncome: r.grossIncome || ((r.yieldBags || r.actualProductionBags || 0) * 1150),
+      actualProductionVolumeMt: hasActualProduction(r) ? (r.actualProductionVolumeMt) : null,
+      actualProductionBags: hasActualProduction(r) ? (r.actualProductionBags || r.yieldBags) : null,
+      yieldBags: hasActualProduction(r) ? (r.yieldBags || r.actualProductionBags) : null,
+      yieldMtPerHa: hasActualProduction(r) ? (r.yieldMtPerHa || r.yieldMetricTons) : null,
+      yieldMetricTons: hasActualProduction(r) ? (r.yieldMetricTons || r.yieldMtPerHa) : null,
+      grossIncome: hasActualProduction(r) ? (r.grossIncome || ((r.yieldBags || r.actualProductionBags || 0) * 1150)) : null,
       productionStatus: r.productionStatus,
       status: r.status,
       growthStage: r.growthStage,
@@ -1040,7 +1066,7 @@ export function sanitizeFarmPayload(parcel: FarmParcel) {
     rsbsa_number: rsbsa,
     barangay: (parcel.barangay || norm.barangay || '').trim(),
     area_ha: areaHa,
-    ecosystem: norm.purpose || norm.ecosystem || 'Irrigated Lowland (NIA)'
+    ecosystem: norm.purpose || norm.ecosystem || null
   };
 }
 
@@ -1390,11 +1416,12 @@ export const supabaseDb = {
    * Fetch LFT technician accounts from Supabase
    */
   async getLftAccounts(): Promise<LftAccount[]> {
-    const { data, error } = await supabaseClient
-      .from('lft_technicians')
-      .select('id, username, name, barangay, assigned_barangays, contact_number, email, terrain, area_ha, status, photo_url, puroks');
-    if (error) return [];
-    return (data || []).map(normalizeLftAccount);
+    const columns = 'id, username, name, barangay, assigned_barangays, contact_number, email, terrain, area_ha, status, photo_url, puroks';
+    let result = await supabaseClient.from('lft_technicians').select(`${columns}, auth_user_id`);
+    if (result.error?.code === '42501' || result.error?.code === '42703') {
+      result = await supabaseClient.from('lft_technicians').select(columns);
+    }
+    return (result.data || []).map(normalizeLftAccount);
   },
 
   async updateOwnLftProfile(account: LftAccount): Promise<void> {

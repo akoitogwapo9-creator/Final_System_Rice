@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useApp } from '../context/AppContext';
-import { BARANGAYS, getBarangayLabel, getBarangayZone, matchBarangay } from '../data/barangays';
+import { BARANGAYS, getBarangayClassifications, getBarangayLabel, getBarangayZone, matchBarangay } from '../data/barangays';
 import { DECREE_CATEGORIES, LegalDecree } from '../data/legalDecrees';
 import { findSilagoBarangayFeature } from '../data/silagoGeoJson';
 import { findBarangayBoundary } from '../data/barangayBoundaries';
@@ -41,16 +41,17 @@ import {
   Compass
 } from 'lucide-react';
 import { BarangayDetailModal } from '../components/BarangayDetailModal';
+import { OfficeCustomFieldsGrid } from '../components/OfficeFormPrimitives';
 import {
   DEFAULT_FORM_SECTIONS,
   DEFAULT_FORM_FIELDS,
   BUILTIN_FIELD_IDS,
   FormTarget,
+  FORM_SCHEMA_EVENT,
   RegistryField as SharedRegistryField,
   RegistryFormSection,
   loadFormSchema,
-  saveFormSchema,
-  resetFormSchema
+  saveFormSchema
 } from '../data/formSchema';
 
 const card = 'rounded-2xl border border-slate-200 bg-white shadow-[0_4px_18px_rgba(15,23,42,0.035)]';
@@ -472,6 +473,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
     );
   }
   const [query, setQuery] = useState('');
+  const [zoneFilter, setZoneFilter] = useState('');
   const [notice, setNotice] = useState('');
   const surveyorTopRef = useRef<HTMLDivElement | null>(null);
 
@@ -519,7 +521,18 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
     });
   }, [lftAccounts, parcels, savedSettingsState, savedPointsState]);
 
-  const filteredRows = rows.filter((row) => `${getBarangayLabel(row.name, barangayProfiles)} ${row.focalPerson} ${row.terrain}`.toLowerCase().includes(query.toLowerCase()));
+  const filteredRows = rows.filter((row) => {
+    const zone = getBarangayZone(row.name, barangayProfiles);
+    return (!zoneFilter || zone === zoneFilter) &&
+      `${getBarangayLabel(row.name, barangayProfiles)} ${row.focalPerson} ${row.terrain}`.toLowerCase().includes(query.trim().toLowerCase());
+  });
+  const zoneColors: Record<string, string> = {
+    Coastal: 'border-blue-200 bg-blue-50 text-blue-800',
+    Upland: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    'Lowland / Plain': 'border-amber-200 bg-amber-50 text-amber-800',
+    'Poblacion / Urban': 'border-violet-200 bg-violet-50 text-violet-800',
+    'Island / Riverside': 'border-cyan-200 bg-cyan-50 text-cyan-800'
+  };
 
   // Active barangay for top GIS surveyor map
   const [activeBarangay, setActiveBarangay] = useState<Barangay>(BARANGAYS[0]);
@@ -758,6 +771,11 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
               className="w-full pl-10 pr-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs text-slate-800 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
             />
           </div>
+          <select aria-label="Filter by barangay zone" value={zoneFilter} onChange={(event) => setZoneFilter(event.target.value)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+            <option value="">All Zones</option>
+            {getBarangayClassifications(barangayProfiles).map((zone) => <option key={zone}>{zone}</option>)}
+          </select>
           <span className="text-xs text-slate-400 font-medium">
             Total: {filteredRows.length} barangays
           </span>
@@ -769,7 +787,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
             <thead className="border-b border-slate-200 bg-slate-50/70 text-[10px] font-bold uppercase tracking-wider text-slate-600">
               <tr>
                 <th className="px-4 py-3">Barangay Name</th>
-                <th className="px-4 py-3">ASF Biosecurity Zone</th>
+                <th className="px-4 py-3">Classification / Zone</th>
                 <th className="px-4 py-3">Boundary &amp; Measured Area</th>
                 <th className="px-4 py-3">Center Coordinates</th>
                 <th className="px-4 py-3">Extension Focal Person</th>
@@ -784,7 +802,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
                     Brgy. {getBarangayLabel(b.name, barangayProfiles)}
                   </td>
                   <td className="px-4 py-3.5">
-                    <span className="inline-flex rounded-full bg-[#ecfdf5] border border-emerald-200/80 text-[#15803d] text-[10px] font-bold px-2.5 py-0.5">
+                    <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${zoneColors[getBarangayZone(b.name, barangayProfiles)] || 'border-slate-200 bg-slate-50 text-slate-700'}`}>
                       {getBarangayZone(b.name, barangayProfiles)}
                     </span>
                   </td>
@@ -1120,1122 +1138,307 @@ function loadDraftOrPublishedSchema() {
   return { ...published, isDraft: false };
 }
 
-/**
- * Municipal Agriculture Office Form Customization Builder.
- * Aligns 1:1 with the 4 Rice Registry sections (2 Steps of Rice Farm Registration +
- * 2 Sections of Crop & Planting Form) and publishes changes live across all modals.
- */
+const FORM_NAMES: Record<FormTarget, string> = {
+  registration: 'Rice Farm Registration Form',
+  crop: 'Crop & Planting Record Form'
+};
+const FIELD_TYPES: Record<string, string> = {
+  'Text Field': 'Text', 'Text Area': 'Long text', 'Dropdown Menu': 'Dropdown',
+  'Date Field': 'Date', 'Number Field': 'Number'
+};
+const CORE_LOCK_NOTE = 'This field is built into the registry and cannot be deleted or change type.';
+const builderButton = 'rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-blue-50 disabled:opacity-40';
+const builderPrimary = 'rounded-md bg-blue-700 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-800';
+const builderInput = 'w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900';
+
+function BuilderSwitch({ label, fieldName, checked, disabled, onChange }: {
+  label: string; fieldName: string; checked: boolean; disabled?: boolean; onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-sm text-slate-700"
+      title={disabled ? 'Turn off Required before hiding this core field.' : undefined}>
+      <input type="checkbox" role="switch" checked={checked} disabled={disabled} className="peer sr-only"
+        aria-label={`${label}: ${fieldName}`} onChange={(event) => onChange(event.target.checked)} />
+      <span aria-hidden="true" className="relative h-5 w-9 rounded-full bg-slate-400 after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-transform peer-checked:bg-blue-700 peer-checked:after:translate-x-4 peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-focus-visible:ring-offset-2 peer-disabled:opacity-50" />
+      {label}
+    </label>
+  );
+}
+
 export function RegistryFormCustomizationView() {
-  const [initialLoaded] = useState(() => loadDraftOrPublishedSchema());
-  const [sections, setSections] = useState<RegistryFormSection[]>(initialLoaded.sections);
-  const [fields, setFields] = useState<SharedRegistryField[]>(initialLoaded.fields);
-  const [activeSection, setActiveSection] = useState<string>(
-    initialLoaded.sections[0]?.label || DEFAULT_FORM_SECTIONS[0].label
-  );
-  const [hasUnpublishedChanges, setHasUnpublishedChanges] = useState<boolean>(initialLoaded.isDraft);
+  const { barangayProfiles, varieties, ecosystems, irrigationAssociations, tenures, seasons } = useApp();
+  const [initial] = useState(loadDraftOrPublishedSchema);
+  const [sections, setSections] = useState(initial.sections);
+  const [fields, setFields] = useState(initial.fields);
+  const [formTarget, setFormTarget] = useState<FormTarget>('registration');
+  const [sectionIds, setSectionIds] = useState<Partial<Record<FormTarget, string>>>({});
+  const [dirty, setDirty] = useState(initial.isDraft);
+  const [publishing, setPublishing] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [editor, setEditor] = useState<{ field: SharedRegistryField; options: string; isNew: boolean } | null>(null);
+  const [newSection, setNewSection] = useState<string | null>(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [previewValues, setPreviewValues] = useState<Record<string, string>>({});
 
-  const [previewDevice, setPreviewDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
-  const [notice, setNotice] = useState<string>('');
-  const [editingField, setEditingField] = useState<SharedRegistryField | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isAddSectionOpen, setIsAddSectionOpen] = useState(false);
-  const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
-  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
-  const [previewFormTab, setPreviewFormTab] = useState<FormTarget>('registration');
+  const formSections = sections.filter((section) => section.formTarget === formTarget);
+  const activeSection = formSections.find((section) => section.id === sectionIds[formTarget]) || formSections[0];
+  const sectionFields = fields.filter((field) => field.formTarget === formTarget && field.section === activeSection?.label);
+  const visibleFields = sectionFields.filter((field) => field.visible !== false);
+  const coreField = (field: SharedRegistryField) => field.isCore || BUILTIN_FIELD_IDS.has(field.id);
 
-  const [sectionDraft, setSectionDraft] = useState<{
-    label: string;
-    description: string;
-    formTarget: FormTarget;
-  }>({
-    label: '',
-    description: '',
-    formTarget: 'registration'
-  });
-
-  const [modalDraft, setModalDraft] = useState<{
-    name: string;
-    fieldType: string;
-    required: boolean;
-    visible: boolean;
-    placeholder: string;
-    helpText: string;
-    optionsText: string;
-  }>({
-    name: '',
-    fieldType: 'Text Field',
-    required: false,
-    visible: true,
-    placeholder: '',
-    helpText: '',
-    optionsText: ''
-  });
-
-  const showToast = (msg: string) => {
-    setNotice(msg);
-    setTimeout(() => setNotice(''), 3800);
+  const saveDraft = (nextSections = sections, nextFields = fields) => {
+    localStorage.setItem(FORM_SCHEMA_DRAFT_KEY, JSON.stringify({ sections: nextSections, fields: nextFields }));
   };
 
-  const activeSectionObj = useMemo(
-    () => sections.find((s) => s.label === activeSection) || sections[0],
-    [sections, activeSection]
-  );
-
-  // Save changes locally in draft state until published live
-  const updateDraftState = (
-    nextSections: RegistryFormSection[],
-    nextFields: SharedRegistryField[],
-    msg?: string
-  ) => {
-    setSections(nextSections);
+  const change = (nextFields = fields, nextSections = sections) => {
     setFields(nextFields);
-    setHasUnpublishedChanges(true);
-    try {
-      localStorage.setItem(
-        FORM_SCHEMA_DRAFT_KEY,
-        JSON.stringify({ sections: nextSections, fields: nextFields })
-      );
-    } catch {}
-    if (msg) showToast(msg);
+    setSections(nextSections);
+    setDirty(true);
+    setNotice('');
+    try { saveDraft(nextSections, nextFields); } catch {}
   };
 
-  const handleConfirmResetDefault = () => {
-    const restored = resetFormSchema();
-    setSections(restored.sections);
-    setFields(restored.fields);
-    setActiveSection(restored.sections[0].label);
-    setHasUnpublishedChanges(false);
-    try {
-      localStorage.removeItem(FORM_SCHEMA_DRAFT_KEY);
-    } catch {}
-    setIsResetConfirmOpen(false);
-    showToast('Reset to the 4 standard Rice Registry sections and published live.');
-  };
-
-  const handleSaveDraft = () => {
-    try {
-      localStorage.setItem(FORM_SCHEMA_DRAFT_KEY, JSON.stringify({ sections, fields }));
-    } catch {}
-    setHasUnpublishedChanges(true);
-    showToast('Form customization draft saved locally. Click "Publish Form Changes" when ready.');
-  };
-
-  const handlePublishChanges = () => {
-    saveFormSchema(sections, fields, true);
-    try {
-      localStorage.removeItem(FORM_SCHEMA_DRAFT_KEY);
-    } catch {}
-    setHasUnpublishedChanges(false);
-    showToast('Form changes published live to Rice Farm Registration & Crop Forms.');
-  };
-
-  const currentSectionFields = useMemo(
-    () => fields.filter((f) => f.section === activeSection),
-    [fields, activeSection]
-  );
-
-  const countBySection = (secName: string) =>
-    fields.filter((f) => f.section === secName).length;
-
-  const handleMoveField = (fieldId: string, direction: -1 | 1) => {
-    const list = [...fields];
-    const currentIndex = list.findIndex((f) => f.id === fieldId);
-    if (currentIndex === -1) return;
-
-    const secIndices: number[] = [];
-    list.forEach((f, idx) => {
-      if (f.section === activeSection) secIndices.push(idx);
-    });
-
-    const posInSec = secIndices.indexOf(currentIndex);
-    const targetPosInSec = posInSec + direction;
-    if (targetPosInSec < 0 || targetPosInSec >= secIndices.length) return;
-
-    const targetIndex = secIndices[targetPosInSec];
-    const temp = list[currentIndex];
-    list[currentIndex] = list[targetIndex];
-    list[targetIndex] = temp;
-
-    updateDraftState(sections, list);
-  };
-
-  const handleToggleVisibility = (fieldId: string) => {
-    const target = fields.find((f) => f.id === fieldId);
-    if (target?.isCore && target.required && target.visible) {
-      showToast(`Core required field "${target.name}" cannot be hidden.`);
-      return;
-    }
-    const updated = fields.map((f) => (f.id === fieldId ? { ...f, visible: !f.visible } : f));
-    updateDraftState(sections, updated);
-  };
-
-  const handleDeleteField = (field: SharedRegistryField) => {
-    if (field.isCore || BUILTIN_FIELD_IDS.has(field.id)) {
-      showToast(`Core Rice Registry field "${field.name}" cannot be deleted (use Edit or Hide instead).`);
-      return;
-    }
-    const updated = fields.filter((f) => f.id !== field.id);
-    updateDraftState(sections, updated, `Removed custom field "${field.name}".`);
-  };
-
-  const handleOpenAddField = () => {
-    setEditingField(null);
-    setModalDraft({
-      name: '',
-      fieldType: 'Text Field',
-      required: false,
-      visible: true,
-      placeholder: '',
-      helpText: '',
-      optionsText: ''
-    });
-    setIsModalOpen(true);
-  };
-
-  const handleOpenEditField = (f: SharedRegistryField) => {
-    setEditingField(f);
-    setModalDraft({
-      name: f.name,
-      fieldType: f.fieldType || 'Text Field',
-      required: f.required,
-      visible: f.visible,
-      placeholder: f.placeholder || '',
-      helpText: f.helpText || '',
-      optionsText: Array.isArray(f.options) ? f.options.join(', ') : ''
-    });
-    setIsModalOpen(true);
-  };
-
-  const handleSaveModalField = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!modalDraft.name.trim()) return;
-
-    const parsedOptions =
-      modalDraft.fieldType === 'Dropdown Menu'
-        ? modalDraft.optionsText
-            .split(/[,\n]/)
-            .map((o) => o.trim())
-            .filter(Boolean)
-        : undefined;
-
-    if (editingField) {
-      const updated = fields.map((f) =>
-        f.id === editingField.id
-          ? {
-              ...f,
-              name: modalDraft.name.trim(),
-              fieldType: editingField.isCore ? f.fieldType : modalDraft.fieldType,
-              required: modalDraft.required,
-              visible: editingField.isCore && modalDraft.required ? true : modalDraft.visible,
-              placeholder: modalDraft.placeholder,
-              helpText: modalDraft.helpText,
-              options: parsedOptions && parsedOptions.length > 0 ? parsedOptions : f.options
-            }
-          : f
-      );
-      updateDraftState(
-        sections,
-        updated,
-        `Updated "${modalDraft.name.trim()}". Click "Publish Form Changes" to apply live.`
-      );
-    } else {
-      const targetForm: FormTarget = activeSectionObj?.formTarget || 'registration';
-      const newField: SharedRegistryField = {
-        id: `custom-${Date.now()}`,
-        section: activeSection,
-        formTarget: targetForm,
-        name: modalDraft.name.trim(),
-        fieldType: modalDraft.fieldType,
-        required: modalDraft.required,
-        visible: modalDraft.visible,
-        valueBehavior: 'editable',
-        placeholder: modalDraft.placeholder,
-        helpText: modalDraft.helpText,
-        options: parsedOptions
-      };
-      updateDraftState(
-        sections,
-        [...fields, newField],
-        `Added "${modalDraft.name.trim()}" to ${activeSection}. Click "Publish Form Changes" to apply live.`
-      );
-    }
-
-    setIsModalOpen(false);
-  };
-
-  const handleSaveNewSection = (e: React.FormEvent) => {
-    e.preventDefault();
-    const label = sectionDraft.label.trim();
-    if (!label) return;
-    if (sections.some((s) => s.label.toLowerCase() === label.toLowerCase())) {
-      showToast(`Section "${label}" already exists.`);
-      return;
-    }
-
-    const newSec: RegistryFormSection = {
-      id: `sec-${Date.now()}`,
-      label,
-      description:
-        sectionDraft.description.trim() ||
-        'Custom office section included automatically when it contains visible fields.',
-      formTarget: sectionDraft.formTarget,
-      isCore: false
+  useEffect(() => {
+    if (dirty) return;
+    const reload = () => {
+      const latest = loadFormSchema();
+      setSections(latest.sections);
+      setFields(latest.fields);
     };
+    window.addEventListener(FORM_SCHEMA_EVENT, reload);
+    return () => window.removeEventListener(FORM_SCHEMA_EVENT, reload);
+  }, [dirty]);
 
-    const nextSections = [...sections, newSec];
-    updateDraftState(nextSections, fields, `Section "${label}" created.`);
-    setActiveSection(label);
-    setSectionDraft({ label: '', description: '', formTarget: 'registration' });
-    setIsAddSectionOpen(false);
+  const publish = async () => {
+    if (publishing) return;
+    setPublishing(true);
+    const synced = await saveFormSchema(sections, fields, true);
+    // Keep a draft made during an in-flight publish.
+    try {
+      const draft = localStorage.getItem(FORM_SCHEMA_DRAFT_KEY);
+      if (!draft || draft === JSON.stringify({ sections, fields })) {
+        localStorage.removeItem(FORM_SCHEMA_DRAFT_KEY);
+        setDirty(false);
+      }
+    } catch {}
+    setPublishing(false);
+    setNotice(synced ? 'Form changes published.' : 'Form changes applied on this device. Cloud sync is pending.');
   };
 
-  const handleDeleteCustomSection = (sec: RegistryFormSection) => {
-    if (sec.isCore) return;
-    const nextSections = sections.filter((s) => s.label !== sec.label);
-    const nextFields = fields.filter((f) => f.section !== sec.label);
-    updateDraftState(
-      nextSections,
-      nextFields,
-      `Deleted custom section "${sec.label}".`
-    );
-    setActiveSection(nextSections[0]?.label || DEFAULT_FORM_SECTIONS[0].label);
+  const reset = () => {
+    change(DEFAULT_FORM_FIELDS, DEFAULT_FORM_SECTIONS);
+    setSectionIds({});
+    setResetOpen(false);
+    setNotice('Defaults restored in the draft. Publish to apply them.');
+  };
+
+  const move = (index: number, direction: -1 | 1) => {
+    const target = sectionFields[index + direction];
+    if (!target) return;
+    const current = sectionFields[index];
+    change(fields.map((field) => field.id === current.id ? target : field.id === target.id ? current : field));
+  };
+
+  const openField = (field?: SharedRegistryField) => {
+    if (!activeSection) return;
+    setEditor({
+      field: field || {
+        id: crypto.randomUUID(), formTarget, section: activeSection.label, name: '',
+        fieldType: 'Text Field', visible: true, required: false
+      },
+      options: field?.options?.join('\n') || '',
+      isNew: !field
+    });
+  };
+
+  const saveField = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editor?.field.name.trim()) return;
+    const options = [...new Set(editor.options.split(/[\n,]/).map((option) => option.trim()).filter(Boolean))];
+    const field = {
+      ...editor.field, name: editor.field.name.trim(),
+      options: coreField(editor.field) ? editor.field.options : options
+    };
+    change(editor.isNew ? [...fields, field] : fields.map((item) => item.id === field.id ? field : item));
+    setEditor(null);
+  };
+
+  const previewOptions: Record<string, string[]> = {
+    'reg-res-barangay': BARANGAYS.map(({ name }) => getBarangayLabel(name, barangayProfiles)),
+    'reg-farm-barangay': BARANGAYS.map(({ name }) => getBarangayLabel(name, barangayProfiles)),
+    'crop-variety': varieties.map(({ name }) => name),
+    'crop-seed-type': ['Inbred (RCEF)', 'Hybrid', 'Unknown / Farmer Saved'],
+    'crop-ecosystem': ecosystems, 'crop-ia': irrigationAssociations, 'crop-tenure': tenures, 'crop-season': seasons
   };
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-4 px-1 py-1 sm:px-2">
-      {/* 1. Office Header Card */}
-      <section className={`${card} p-5 sm:p-6 space-y-4`}>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-start gap-3.5">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-800 ring-1 ring-emerald-100">
-              <SlidersHorizontal className="h-6 w-6" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-                  Form Customization
-                </h1>
-                <span className="inline-flex items-center rounded-full bg-emerald-50 border border-emerald-200/80 px-2.5 py-0.5 text-xs font-bold text-emerald-700">
-                  Admin-Only Builder
-                </span>
-                {hasUnpublishedChanges && (
-                  <span className="inline-flex items-center rounded-full bg-amber-50 border border-amber-300 px-2.5 py-0.5 text-[11px] font-bold text-amber-800">
-                    Unpublished Draft
-                  </span>
-                )}
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                Configure sections and fields displayed in the Rice Farm Registration Form and Crop &amp; Planting Form.
-              </p>
-            </div>
-          </div>
-
-          {/* Action buttons */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={() => setIsResetConfirmOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50 cursor-pointer"
-            >
-              <RotateCcw className="h-3.5 w-3.5 text-slate-500" />
-              <span>Reset Default</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPreviewFormTab(activeSectionObj?.formTarget || 'registration');
-                setIsPreviewModalOpen(true);
-              }}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50 cursor-pointer"
-            >
-              <Eye className="h-3.5 w-3.5 text-slate-500" />
-              <span>Preview Form</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveDraft}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50 cursor-pointer"
-            >
-              <Save className="h-3.5 w-3.5 text-slate-500" />
-              <span>Save Draft</span>
-            </button>
-            <button
-              type="button"
-              onClick={handlePublishChanges}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#15803d] hover:bg-[#166534] px-4 py-2 text-xs font-bold text-white shadow-sm transition cursor-pointer"
-            >
-              <Check className="h-3.5 w-3.5" />
-              <span>Publish Form Changes</span>
-            </button>
-          </div>
+    <div className="mx-auto max-w-7xl space-y-4">
+      <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-100 bg-white p-4 shadow-sm">
+        <div>
+          <h1 className="text-lg font-bold text-blue-950">Form Customization</h1>
+          <span className="text-xs text-slate-600">{dirty ? 'Unpublished changes' : 'Published settings'}</span>
         </div>
-      </section>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={builderButton} onClick={() => setResetOpen(true)}>Reset Default</button>
+          <button type="button" className={builderButton} onClick={() => {
+            try { saveDraft(); setNotice('Draft saved on this device.'); } catch { setNotice('Draft could not be saved on this device.'); }
+          }}>Save Draft</button>
+          <button type="button" className={builderPrimary} onClick={publish} disabled={publishing}>{publishing ? 'Publishing…' : 'Publish Form Changes'}</button>
+        </div>
+      </header>
 
-      {/* 2. Aligned 4-Section Pill Tabs Row + Add Section */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {sections.map((sec) => {
-          const count = countBySection(sec.label);
-          const isActive = sec.label === activeSection;
-          return (
-            <button
-              key={sec.id}
-              type="button"
-              onClick={() => setActiveSection(sec.label)}
-              className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold transition cursor-pointer ${
-                isActive
-                  ? 'bg-[#15803d] text-white shadow-sm ring-1 ring-[#15803d]'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-              }`}
-            >
-              <span>{sec.label}</span>
-              <span
-                className={`rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
-                  isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
-                }`}
-              >
-                {count}
-              </span>
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => setIsAddSectionOpen(true)}
-          className="shrink-0 inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 bg-white hover:bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-600 transition cursor-pointer"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>+ Add Section</span>
-        </button>
+      <nav aria-label="Form switcher" className="grid gap-2 rounded-lg border border-blue-100 bg-white p-2 sm:grid-cols-2">
+        {(Object.keys(FORM_NAMES) as FormTarget[]).map((target) => (
+          <button key={target} type="button" aria-pressed={target === formTarget} onClick={() => setFormTarget(target)}
+            className={`rounded-md px-4 py-3 text-left text-sm font-semibold ${target === formTarget ? 'bg-blue-700 text-white' : 'text-blue-950 hover:bg-blue-50'}`}>
+            {FORM_NAMES[target]}
+          </button>
+        ))}
+      </nav>
+
+      <nav aria-label="Form sections" className="flex flex-wrap gap-2">
+        {formSections.map((section) => (
+          <button key={section.id} type="button" aria-pressed={activeSection?.id === section.id}
+            className={`${builderButton} aria-pressed:border-blue-400 aria-pressed:bg-blue-50 aria-pressed:text-blue-900`}
+            onClick={() => setSectionIds({ ...sectionIds, [formTarget]: section.id })}>{section.label}</button>
+        ))}
+        <button type="button" className={builderButton} onClick={() => setNewSection('')}>Add Section</button>
+      </nav>
+      {notice && <p role="status" className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-900">{notice}</p>}
+
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        <section className="space-y-2">
+          <header className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold text-blue-950">{activeSection?.label}</h2>
+            <div className="flex flex-wrap gap-2">
+              {activeSection && !activeSection.isCore && (
+                <button type="button" className={builderButton} onClick={() => {
+                  if (!window.confirm('Delete this custom section and its fields from the draft?')) return;
+                  change(fields.filter((field) => field.formTarget !== formTarget || field.section !== activeSection.label),
+                    sections.filter((section) => section.id !== activeSection.id));
+                }}>Delete Section</button>
+              )}
+              <button type="button" className={builderButton} onClick={() => openField()}>Add Field</button>
+            </div>
+          </header>
+          {sectionFields.map((field, index) => (
+            <article key={field.id} className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-semibold text-slate-900">{field.name}</h3>
+                <span className="rounded bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-800">
+                  {FIELD_TYPES[field.fieldType || 'Text Field'] || field.fieldType}
+                </span>
+                {coreField(field) && <span tabIndex={0} title={CORE_LOCK_NOTE} aria-label={CORE_LOCK_NOTE} className="inline-flex items-center gap-1 text-xs text-slate-600"><Lock className="h-3 w-3" /> Core</span>}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <BuilderSwitch label="Required" fieldName={field.name} checked={field.required}
+                    onChange={(checked) => change(fields.map((item) => item.id === field.id
+                      ? { ...item, required: checked, visible: checked || item.visible } : item))} />
+                  <BuilderSwitch label="Show in Form" fieldName={field.name} checked={field.visible !== false}
+                    disabled={Boolean(coreField(field) && field.required)}
+                    onChange={(checked) => change(fields.map((item) => item.id === field.id
+                      ? { ...item, visible: checked, required: checked && item.required } : item))} />
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  <button type="button" className={builderButton} disabled={index === 0} aria-label={`Move ${field.name} up`} onClick={() => move(index, -1)}>Up</button>
+                  <button type="button" className={builderButton} disabled={index === sectionFields.length - 1} aria-label={`Move ${field.name} down`} onClick={() => move(index, 1)}>Down</button>
+                  <button type="button" className={builderButton} onClick={() => openField(field)}>Edit</button>
+                  {!coreField(field) && <button type="button" className={builderButton} onClick={() => change(fields.filter((item) => item.id !== field.id))}>Delete</button>}
+                </div>
+              </div>
+            </article>
+          ))}
+          {!sectionFields.length && <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">No fields in this section.</p>}
+        </section>
+
+        <aside className="rounded-lg border border-blue-100 bg-white p-4" aria-label="Live form preview">
+          <h2 className="font-semibold text-blue-950">Live Form Preview</h2>
+          <p className="my-3 rounded-md bg-blue-50 p-3 text-sm text-blue-900">
+            Interactive Preview — Changes apply to live forms once you click Publish Form Changes
+          </p>
+          <h3 className="text-sm font-semibold text-slate-800">{activeSection?.label}</h3>
+          {visibleFields.length ? (
+            <OfficeCustomFieldsGrid
+              fields={visibleFields.map((field) => ({
+                ...field, fieldType: field.fieldType === 'Barangay Selector' ? 'Dropdown Menu' : field.fieldType,
+                options: previewOptions[field.id] || field.options
+              }))}
+              values={previewValues}
+              onChange={(id, value) => setPreviewValues((previous) => ({ ...previous, [id]: value }))}
+            />
+          ) : <p className="mt-3 text-sm text-slate-600">No fields are visible in this section.</p>}
+        </aside>
       </div>
 
-      {notice && (
-        <div
-          role="status"
-          className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-semibold text-emerald-900 flex items-center gap-2"
-        >
-          <Check className="h-4 w-4 text-emerald-700 shrink-0" />
-          <span>{notice}</span>
-        </div>
-      )}
-
-      {/* 3. Main Two-Column Layout */}
-      <div className="grid gap-5 lg:grid-cols-12 items-start">
-        {/* LEFT COLUMN: Section Fields Customizer (7 Columns) */}
-        <div className="lg:col-span-7 space-y-3">
-          {/* Section Header Card */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base font-bold text-slate-900">{activeSection}</h2>
-                <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">
-                  {currentSectionFields.length} Fields
-                </span>
-                <span
-                  className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                    activeSectionObj?.formTarget === 'crop'
-                      ? 'bg-amber-50 border border-amber-200 text-amber-800'
-                      : 'bg-blue-50 border border-blue-200 text-blue-800'
-                  }`}
-                >
-                  {activeSectionObj?.formTarget === 'crop'
-                    ? 'Crop & Planting Form'
-                    : 'Rice Farm Registration Form'}
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {activeSectionObj?.description || 'Custom office form section.'}
-              </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {activeSectionObj && !activeSectionObj.isCore && (
-                <button
-                  type="button"
-                  onClick={() => handleDeleteCustomSection(activeSectionObj)}
-                  className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 text-xs font-bold text-rose-700 transition cursor-pointer"
-                  title="Delete custom section"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>Delete Section</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={handleOpenAddField}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#15803d] hover:bg-[#166534] px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs transition cursor-pointer"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>+ Add Field</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Field Cards List */}
-          <div className="space-y-2.5">
-            {currentSectionFields.map((field) => {
-              const isCoreField = Boolean(field.isCore || BUILTIN_FIELD_IDS.has(field.id));
-              return (
-                <div
-                  key={field.id}
-                  className="group rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs hover:border-slate-300 transition space-y-2"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-start gap-2.5 min-w-0">
-                      <span className="mt-1 cursor-grab text-slate-300 group-hover:text-slate-400">
-                        <GripVertical className="h-4 w-4" />
-                      </span>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-bold text-slate-900 truncate">
-                            {field.name}
-                            {field.required && <span className="text-rose-500 ml-0.5">*</span>}
-                          </span>
-                          <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                            {field.fieldType || 'Text Field'}
-                          </span>
-                          <span
-                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                              field.required
-                                ? 'bg-rose-50 border border-rose-200 text-rose-700'
-                                : 'bg-slate-100 text-slate-500'
-                            }`}
-                          >
-                            Required: {field.required ? 'ON' : 'OFF'}
-                          </span>
-                          <span
-                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
-                              field.visible
-                                ? 'bg-emerald-50 border border-emerald-200 text-emerald-700'
-                                : 'bg-amber-50 border border-amber-200 text-amber-700'
-                            }`}
-                          >
-                            {field.visible ? 'Visible: ON' : 'Hidden'}
-                          </span>
-                          {field.isCore ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500">
-                              <Lock className="w-2.5 h-2.5" />
-                              <span>Core</span>
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700">
-                              <Pencil className="w-2.5 h-2.5" />
-                              <span>Editable</span>
-                            </span>
-                          )}
-                        </div>
-
-                        {field.placeholder && (
-                          <div className="text-[11px] text-slate-500 mt-1 font-mono">
-                            Placeholder: &quot;{field.placeholder}&quot;
-                          </div>
-                        )}
-
-                        {field.helpText && (
-                          <div className="text-[11px] text-slate-400 mt-0.5">{field.helpText}</div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Right Action Buttons */}
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleMoveField(field.id, -1)}
-                        className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition cursor-pointer"
-                        title="Move Up"
-                      >
-                        <ChevronUp className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleMoveField(field.id, 1)}
-                        className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition cursor-pointer"
-                        title="Move Down"
-                      >
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleVisibility(field.id)}
-                        className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition cursor-pointer"
-                        title={field.visible ? 'Hide field' : 'Show field'}
-                      >
-                        {field.visible ? (
-                          <Eye className="h-3.5 w-3.5" />
-                        ) : (
-                          <EyeOff className="h-3.5 w-3.5 text-amber-600" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEditField(field)}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition cursor-pointer"
-                        title="Edit field settings"
-                      >
-                        <Pencil className="h-3 w-3" />
-                        <span>Edit</span>
-                      </button>
-                      {isCoreField ? (
-                        <span
-                          className="p-1 text-slate-300 cursor-not-allowed"
-                          title="Built-in Rice Registry field (cannot be deleted)"
-                        >
-                          <Lock className="h-3.5 w-3.5" />
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteField(field)}
-                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                          title="Delete custom field"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-
-            {currentSectionFields.length === 0 && (
-              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white p-8 text-center">
-                <SlidersHorizontal className="mx-auto h-8 w-8 text-slate-300" />
-                <p className="mt-2 text-xs font-semibold text-slate-700">
-                  No fields in this section yet
-                </p>
-                <p className="mt-0.5 text-[11px] text-slate-400">
-                  Click &quot;+ Add Field&quot; above to add fields to {activeSection}.
-                </p>
-              </div>
+      {editor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <form role="dialog" aria-modal="true" aria-label={editor.isNew ? 'Add Field' : 'Edit Field'} onSubmit={saveField}
+            className="max-h-[90dvh] w-full max-w-lg space-y-3 overflow-auto rounded-lg bg-white p-5 shadow-xl">
+            <h2 className="text-base font-semibold text-blue-950">{editor.isNew ? 'Add Field' : 'Edit Field'}</h2>
+            <label className="block text-sm">Field Label
+              <input required className={builderInput} value={editor.field.name} onChange={(event) => setEditor({ ...editor, field: { ...editor.field, name: event.target.value } })} />
+            </label>
+            <label className="block text-sm">Field Type
+              <select className={builderInput} disabled={Boolean(coreField(editor.field))} title={CORE_LOCK_NOTE}
+                value={editor.field.fieldType || 'Text Field'} onChange={(event) => setEditor({ ...editor, field: { ...editor.field, fieldType: event.target.value } })}>
+                {[...new Set([...Object.keys(FIELD_TYPES), editor.field.fieldType || 'Text Field'])].map((type) => <option key={type} value={type}>{FIELD_TYPES[type] || type}</option>)}
+              </select>
+            </label>
+            <label className="block text-sm">Placeholder
+              <input className={builderInput} value={editor.field.placeholder || ''} onChange={(event) => setEditor({ ...editor, field: { ...editor.field, placeholder: event.target.value } })} />
+            </label>
+            <label className="block text-sm">Helper description
+              <textarea className={builderInput} value={editor.field.helpText || ''} onChange={(event) => setEditor({ ...editor, field: { ...editor.field, helpText: event.target.value } })} />
+            </label>
+            {editor.field.fieldType === 'Dropdown Menu' && !coreField(editor.field) && (
+              <label className="block text-sm">Dropdown choices, one per line
+                <textarea required className={builderInput} value={editor.options} onChange={(event) => setEditor({ ...editor, options: event.target.value })} />
+              </label>
             )}
-          </div>
-        </div>
-
-        {/* RIGHT COLUMN: Live Form Preview (5 Columns) */}
-        <div className="lg:col-span-5 space-y-3 sticky top-4">
-          <div className="flex items-center justify-between p-3.5 bg-white rounded-2xl border border-slate-200 shadow-2xs">
-            <div className="flex items-center gap-2">
-              <Eye className="w-4 h-4 text-emerald-700" />
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-900">
-                LIVE FORM PREVIEW
-              </span>
+            {editor.field.fieldType === 'Dropdown Menu' && coreField(editor.field) && <p className="text-xs text-slate-600">Manage these choices using the reference lists in the live form.</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" className={builderButton} onClick={() => setEditor(null)}>Cancel</button>
+              <button type="submit" className={builderPrimary}>Save Field</button>
             </div>
-            <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setPreviewDevice('desktop')}
-                className={`p-1.5 rounded-md transition ${
-                  previewDevice === 'desktop'
-                    ? 'bg-white shadow-2xs text-emerald-800'
-                    : 'text-slate-500 hover:text-slate-700'
-                }`}
-                title="Desktop View"
-              >
-                <Monitor className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setPreviewDevice('tablet')}
-                className={`p-1.5 rounded-md transition ${
-                  previewDevice === 'tablet'
-                    ? 'bg-white shadow-2xs text-emerald-800'
-                    : 'text-slate-500 hover:text-slate-700'
-                }`}
-                title="Tablet View"
-              >
-                <Tablet className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setPreviewDevice('mobile')}
-                className={`p-1.5 rounded-md transition ${
-                  previewDevice === 'mobile'
-                    ? 'bg-white shadow-2xs text-emerald-800'
-                    : 'text-slate-500 hover:text-slate-700'
-                }`}
-                title="Mobile View"
-              >
-                <Smartphone className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          <div
-            className={`transition-all duration-300 mx-auto ${
-              previewDevice === 'mobile'
-                ? 'max-w-[340px]'
-                : previewDevice === 'tablet'
-                ? 'max-w-[420px]'
-                : 'w-full'
-            }`}
-          >
-            <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-sm">
-              <div className="bg-[#173b2c] text-white px-4 py-3">
-                <div className="text-[9px] font-bold tracking-widest uppercase text-emerald-300">
-                  MUNICIPAL AGRICULTURE OFFICE &middot;{' '}
-                  {activeSectionObj?.formTarget === 'crop'
-                    ? 'CROP & PLANTING FORM'
-                    : 'RICE FARM REGISTRATION FORM'}
-                </div>
-                <div className="text-xs font-bold text-white mt-0.5">{activeSection}</div>
-              </div>
-
-              <div className="p-4 sm:p-5 space-y-3.5 bg-slate-50/40">
-                {currentSectionFields
-                  .filter((f) => f.visible)
-                  .map((field) => (
-                    <div key={field.id} className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-bold text-slate-800">
-                          {field.name}
-                          {field.required && <span className="text-rose-500 ml-0.5">*</span>}
-                        </label>
-                        <span className="text-[10px] font-medium text-emerald-700">
-                          {field.valueBehavior === 'auto' ? 'Auto' : 'Editable'}
-                        </span>
-                      </div>
-
-                      {field.fieldType === 'Dropdown Menu' ||
-                      field.fieldType === 'Barangay Selector' ? (
-                        <div className="relative">
-                          <select
-                            disabled
-                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 appearance-none shadow-2xs"
-                          >
-                            <option>{field.placeholder || `Select ${field.name}`}</option>
-                            {field.options?.map((opt) => (
-                              <option key={opt}>{opt}</option>
-                            ))}
-                          </select>
-                          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
-                        </div>
-                      ) : field.fieldType === 'File Upload' ? (
-                        <div className="rounded-xl border border-dashed border-emerald-300 bg-emerald-50/40 p-3 text-center text-xs font-semibold text-emerald-800 flex items-center justify-center gap-2">
-                          <Upload className="w-3.5 h-3.5 text-emerald-700" />
-                          <span>{field.placeholder || 'Choose or upload image'}</span>
-                        </div>
-                      ) : field.fieldType === 'Text Area' ? (
-                        <textarea
-                          readOnly
-                          rows={2}
-                          placeholder={field.placeholder || ''}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 shadow-2xs resize-none"
-                        />
-                      ) : (
-                        <input
-                          type={
-                            field.fieldType === 'Date Field'
-                              ? 'date'
-                              : field.fieldType === 'Number Field'
-                              ? 'number'
-                              : 'text'
-                          }
-                          readOnly
-                          placeholder={field.placeholder || ''}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 placeholder:text-slate-400 shadow-2xs"
-                        />
-                      )}
-
-                      {field.helpText && (
-                        <span className="text-[10px] text-slate-400 block leading-tight">
-                          {field.helpText}
-                        </span>
-                      )}
-                    </div>
-                  ))}
-
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    className="w-full rounded-xl bg-[#15803d] hover:bg-[#166534] py-2.5 text-xs font-bold text-white shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>
-                      {activeSectionObj?.formTarget === 'crop'
-                        ? 'Save Crop & Planting Record'
-                        : 'Save Rice Farm Registration'}
-                    </span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Add / Edit Field Modal */}
-      {isModalOpen && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs"
-          role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsModalOpen(false);
-          }}
-        >
-          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  {editingField ? 'Edit Field Settings' : 'Add New Custom Form Field'}
-                </h3>
-                <p className="text-xs text-slate-500">Section: {activeSection}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveModalField} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Field Label <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={modalDraft.name}
-                  onChange={(e) => setModalDraft({ ...modalDraft, name: e.target.value })}
-                  placeholder="e.g. PCIC Insurance Policy No."
-                  className={input}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Field Type</label>
-                  <select
-                    disabled={Boolean(editingField?.isCore)}
-                    value={modalDraft.fieldType}
-                    onChange={(e) => setModalDraft({ ...modalDraft, fieldType: e.target.value })}
-                    className={`${input} disabled:bg-slate-100 disabled:text-slate-500`}
-                  >
-                    <option>Text Field</option>
-                    <option>Number Field</option>
-                    <option>Date Field</option>
-                    <option>Dropdown Menu</option>
-                    <option>Barangay Selector</option>
-                    <option>Text Area</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Placeholder Text
-                  </label>
-                  <input
-                    type="text"
-                    value={modalDraft.placeholder}
-                    onChange={(e) => setModalDraft({ ...modalDraft, placeholder: e.target.value })}
-                    placeholder="e.g. Enter details..."
-                    className={input}
-                  />
-                </div>
-              </div>
-
-              {modalDraft.fieldType === 'Dropdown Menu' && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Dropdown Options (comma-separated)
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={modalDraft.optionsText}
-                    onChange={(e) => setModalDraft({ ...modalDraft, optionsText: e.target.value })}
-                    placeholder="e.g. Option A, Option B, Option C"
-                    className={input}
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Help / Guidance Text
-                </label>
-                <input
-                  type="text"
-                  value={modalDraft.helpText}
-                  onChange={(e) => setModalDraft({ ...modalDraft, helpText: e.target.value })}
-                  placeholder="e.g. Guidance note shown under the field input"
-                  className={input}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                <label className="flex items-center justify-between rounded-xl border border-slate-200 p-3 cursor-pointer hover:bg-slate-50">
-                  <span className="text-xs font-bold text-slate-700">Required Field</span>
-                  <input
-                    type="checkbox"
-                    checked={modalDraft.required}
-                    onChange={(e) => setModalDraft({ ...modalDraft, required: e.target.checked })}
-                    className="h-4 w-4 rounded accent-emerald-700 cursor-pointer"
-                  />
-                </label>
-
-                <label className="flex items-center justify-between rounded-xl border border-slate-200 p-3 cursor-pointer hover:bg-slate-50">
-                  <span className="text-xs font-bold text-slate-700">Visible in Form</span>
-                  <input
-                    type="checkbox"
-                    disabled={Boolean(editingField?.isCore && modalDraft.required)}
-                    checked={modalDraft.visible}
-                    onChange={(e) => setModalDraft({ ...modalDraft, visible: e.target.checked })}
-                    className="h-4 w-4 rounded accent-emerald-700 cursor-pointer"
-                  />
-                </label>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-[#15803d] hover:bg-[#166534] text-xs font-bold text-white shadow-sm cursor-pointer"
-                >
-                  {editingField ? 'Save Changes' : 'Add Field'}
-                </button>
-              </div>
-            </form>
-          </div>
+          </form>
         </div>
       )}
 
-      {/* Add Section Modal */}
-      {isAddSectionOpen && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs"
-          role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsAddSectionOpen(false);
-          }}
-        >
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Add Custom Form Section</h3>
-                <p className="text-xs text-slate-500">
-                  Attach additional fields to Rice Farm Registration or Crop &amp; Planting Form.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsAddSectionOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+      {newSection !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <form aria-label="Add Section" role="dialog" aria-modal="true" className="w-full max-w-md space-y-3 rounded-lg bg-white p-5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const label = newSection.trim();
+              if (!label || sections.some((section) => section.label.toLowerCase() === label.toLowerCase())) {
+                setNotice('Choose a unique section name.');
+                return;
+              }
+              const id = crypto.randomUUID();
+              change(fields, [...sections, { id, label, formTarget, description: '' }]);
+              setSectionIds({ ...sectionIds, [formTarget]: id });
+              setNewSection(null);
+            }}>
+            <label className="block text-sm font-semibold">Section name
+              <input required className={builderInput} value={newSection} onChange={(event) => setNewSection(event.target.value)} />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button type="button" className={builderButton} onClick={() => setNewSection(null)}>Cancel</button>
+              <button type="submit" className={builderPrimary}>Add Section</button>
             </div>
-
-            <form onSubmit={handleSaveNewSection} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Section Title <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={sectionDraft.label}
-                  onChange={(e) => setSectionDraft({ ...sectionDraft, label: e.target.value })}
-                  placeholder="e.g. 5. Grain Storage & Mechanization"
-                  className={input}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Target Form</label>
-                <select
-                  value={sectionDraft.formTarget}
-                  onChange={(e) =>
-                    setSectionDraft({
-                      ...sectionDraft,
-                      formTarget: e.target.value as FormTarget
-                    })
-                  }
-                  className={input}
-                >
-                  <option value="registration">Rice Farm Registration Form (Step 2)</option>
-                  <option value="crop">Crop &amp; Planting Record Form</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Description</label>
-                <input
-                  type="text"
-                  value={sectionDraft.description}
-                  onChange={(e) =>
-                    setSectionDraft({ ...sectionDraft, description: e.target.value })
-                  }
-                  placeholder="Optional description shown in the form builder"
-                  className={input}
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setIsAddSectionOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-[#15803d] hover:bg-[#166534] text-xs font-bold text-white shadow-sm cursor-pointer"
-                >
-                  Create Section
-                </button>
-              </div>
-            </form>
-          </div>
+          </form>
         </div>
       )}
 
-      {/* Full Form Preview Modal */}
-      {isPreviewModalOpen && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-xs"
-          role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsPreviewModalOpen(false);
-          }}
-        >
-          <div className="w-full max-w-3xl max-h-[88vh] rounded-3xl bg-white shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
-            <div className="bg-[#173b2c] text-white px-6 py-4 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-300">
-                  Full Form Customization Preview
-                </div>
-                <h3 className="text-base font-bold">
-                  {previewFormTab === 'registration'
-                    ? 'Rice Farm Registration Form (Steps 1 & 2)'
-                    : 'Crop & Planting Record Form (Sections 3 & 4)'}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsPreviewModalOpen(false)}
-                className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/10 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="px-6 pt-3 pb-2 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPreviewFormTab('registration')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition ${
-                  previewFormTab === 'registration'
-                    ? 'bg-[#15803d] text-white'
-                    : 'bg-white border border-slate-200 text-slate-600'
-                }`}
-              >
-                Rice Farm Registration Form
-              </button>
-              <button
-                type="button"
-                onClick={() => setPreviewFormTab('crop')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition ${
-                  previewFormTab === 'crop'
-                    ? 'bg-[#15803d] text-white'
-                    : 'bg-white border border-slate-200 text-slate-600'
-                }`}
-              >
-                Crop &amp; Planting Form
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto space-y-4 bg-slate-50/50">
-              {sections
-                .filter((s) => s.formTarget === previewFormTab)
-                .map((sec) => {
-                  const secFields = fields.filter(
-                    (f) => f.section === sec.label && f.visible
-                  );
-                  return (
-                    <div
-                      key={sec.id}
-                      className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3"
-                    >
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                          {sec.label}
-                        </h4>
-                        <span className="text-[11px] font-semibold text-slate-500">
-                          {secFields.length} visible {secFields.length === 1 ? 'field' : 'fields'}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {secFields.map((f) => (
-                          <div
-                            key={f.id}
-                            className={`space-y-1 ${
-                              f.fieldType === 'Text Area' ? 'sm:col-span-2' : ''
-                            }`}
-                          >
-                            <label className="block text-[11px] font-bold text-slate-700">
-                              {f.name}
-                              {f.required && <span className="text-rose-500 ml-0.5">*</span>}
-                            </label>
-                            <input
-                              type="text"
-                              readOnly
-                              placeholder={f.placeholder || f.fieldType || 'Input'}
-                              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600"
-                            />
-                          </div>
-                        ))}
-                        {secFields.length === 0 && (
-                          <p className="text-xs text-slate-400 sm:col-span-2">
-                            No visible fields in this section.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Inline Reset Confirmation Modal */}
-      {isResetConfirmOpen && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs"
-          role="presentation"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsResetConfirmOpen(false);
-          }}
-        >
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl border border-slate-200 space-y-4">
-            <h3 className="text-base font-bold text-slate-900">Reset Form Customization?</h3>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              This will restore the 4 standard Rice Registry sections and default fields, and
-              remove any custom sections or custom fields from the active forms.
-            </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsResetConfirmOpen(false)}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmResetDefault}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-xs font-bold text-white shadow-sm cursor-pointer"
-              >
-                Reset to Default &amp; Publish
-              </button>
+      {resetOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <div role="dialog" aria-modal="true" aria-label="Reset Form Defaults" className="w-full max-w-md space-y-3 rounded-lg bg-white p-5">
+            <h2 className="font-semibold text-blue-950">Restore the default form fields?</h2>
+            <p className="text-sm text-slate-600">This replaces the draft for both forms. Saved farmer and crop records are kept.</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" className={builderButton} onClick={() => setResetOpen(false)}>Cancel</button>
+              <button type="button" className={builderPrimary} onClick={reset}>Reset Draft</button>
             </div>
           </div>
         </div>
