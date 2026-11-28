@@ -24,12 +24,13 @@ export interface DistributionEntry extends DistributionDraft {
   recorded_by: string;
 }
 
-export async function loadDistribution(releasesOnly = false): Promise<DistributionEntry[]> {
+export async function loadDistribution(releasesOnly = false, category?: StockItem['category']): Promise<DistributionEntry[]> {
   const entries: DistributionEntry[] = [];
   const size = 500;
   for (let offset = 0; ; offset += size) {
     let query = supabaseClient.from('registry_distribution').select('*');
     if (releasesOnly) query = query.eq('entry_type', 'Release');
+    if (category) query = query.eq('category', category);
     const { data, error } = await query.order('recorded_at', { ascending: false })
       .order('id').range(offset, offset + size - 1);
     if (error) throw error;

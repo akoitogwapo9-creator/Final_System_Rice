@@ -1,5 +1,6 @@
+import { FarmerCombobox } from './FarmerCombobox';
 import { OfficeRegistryVerification } from './OfficeRegistryVerification';
-import { boundaryKey, farmerKey, farmLabel, groupFarmerParcels, isRsbsaReference, rsbsaReference } from '../data/officeRegistry';
+import { boundaryKey, farmerReference, farmerKey, farmLabel, nextAvailableFarmLabels, isRsbsaReference, rsbsaReference } from '../data/officeRegistry';
 import React, { useState, useEffect, useId, useMemo, useRef } from 'react';
 import { FarmParcel } from '../types';
 import {
@@ -67,6 +68,7 @@ interface AddParcelModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (parcel: FarmParcel, additionalParcels?: FarmParcel[]) => Promise<void> | void;
+  initialFarmer?: FarmParcel | null;
   editingParcel?: FarmParcel | null;
   initialCoords?: {
     lat: number;
@@ -79,11 +81,29 @@ interface AddParcelModalProps {
   onDelete?: (tagNumber: string) => Promise<void> | void;
 }
 
+function farmerProfile(farmer?: FarmParcel | null) {
+  const parsed = parseFarmerName(farmer?.raiserName || '');
+  return {
+    farmerFamilyName: farmer?.farmerFamilyName || parsed.family || '',
+    farmerGivenName: farmer?.farmerGivenName || parsed.given || '',
+    farmerMiddleName: farmer?.farmerMiddleName || parsed.middle || '',
+    farmerSuffix: farmer?.farmerSuffix || parsed.suffix || '',
+    raiserName: farmer?.raiserName || '',
+    swineNameOrId: farmer ? farmerReference(farmer) || 'NO RSBSA' : '',
+    birthday: farmer?.birthday || '',
+    contactNumber: farmer?.contactNumber || '',
+    photoUrl: farmer?.photoUrl,
+    address: farmer?.address || '',
+    residential_address: farmer?.residential_address || farmer?.address || ''
+  };
+}
+
 export const AddParcelModal: React.FC<AddParcelModalProps> = ({
   isOpen,
   onClose,
   onSave,
   editingParcel,
+  initialFarmer,
   initialCoords,
   defaultBarangay,
   onDelete
@@ -93,29 +113,28 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     barangayProfiles,
     permissions,
     registryPreferences,
+    fetchParcels,
     parcels
   } = useApp();
 
-  const [linkedTag, setLinkedTag] = useState('');
+  const [linkedKey, setLinkedKey] = useState('');
   const [extraParcels, setExtraParcels] = useState<Array<{
     id: string; barangay: string; purok: string; area: string; ecosystem: string;
     lat?: number; lng?: number; boundary?: [number, number][];
   }>>([]);
-  const linkedFarmer = parcels.find((parcel) => parcel.tagNumber === linkedTag);
+  const existingFarms = useMemo(() => parcels.filter(parcel => !parcel.isArchived && !parcel.is_archived &&
+    isUserAuthorizedForBarangay(currentUser, parcel.barangay)), [parcels, currentUser]);
+  const linkedFarmer = existingFarms.find(parcel => farmerKey(parcel) === linkedKey);
   useEffect(() => {
     if (isOpen) {
-      setLinkedTag('');
+      setLinkedKey(initialFarmer ? farmerKey(initialFarmer) : '');
       setExtraParcels([]);
     }
-  }, [isOpen, editingParcel]);
-  const usedLabels = new Set(linkedFarmer ? parcels.filter(p => farmerKey(p) === farmerKey(linkedFarmer)).map(farmLabel) : []);
-  const nextFarmLabels = Array.from({ length: extraParcels.length + 1 }, () => {
-    let number = 1;
-    while (usedLabels.has(`Farm ${number}`)) number++;
-    const label = `Farm ${number}`;
-    usedLabels.add(label);
-    return label;
-  });
+  }, [isOpen, editingParcel, initialFarmer]);
+  const nextFarmLabels = nextAvailableFarmLabels(
+    linkedKey ? parcels.filter(parcel => farmerKey(parcel) === linkedKey) : [],
+    extraParcels.length + 1
+  );
 
   const parcelPrefix = registryPreferences.parcelPrefix;
 
@@ -237,10 +256,6 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       );
     } else {
       setCustomValues({});
-      const randomRsbsa = `08-64-16-${String(Math.floor(1 + Math.random() * 15)).padStart(3, '0')}-${String(
-        Math.floor(1000 + Math.random() * 9000)
-      )}`;
-
       const farmBarangay = availableBarangays.find((barangay) =>
         matchBarangay(barangay.name, initialCoords?.barangay || ''))?.name || effectiveDefaultBarangay;
       const parcelCode = BARANGAY_PARCEL_CODES[farmBarangay as OfficialBarangay];
@@ -250,13 +265,13 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
       setFormData({
         tagNumber: randomTag,
-        swineNameOrId: randomRsbsa,
+        swineNameOrId: '',
         farmerFamilyName: '',
         farmerGivenName: '',
         farmerMiddleName: '',
         raiserName: '',
-        birthday: '1975-06-15',
-        contactNumber: '09175551234',
+        birthday: '',
+        contactNumber: '',
         barangay: farmBarangay,
         purok: 'Purok Riverside',
         address: residentialAddress,
@@ -277,7 +292,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
         boundaryCoords: initialCoords?.boundaryCoords,
         syncStatus: 'Live Synced',
         commodity: 'Rice',
-        pestAdvisoryNotice: 'Routine water and nutrient monitoring advised.'
+        pestAdvisoryNotice: 'Routine water and nutrient monitoring advised.',
+        ...(initialFarmer ? farmerProfile(initialFarmer) : {})
       });
     }
     setParcelIdOverridden(false);
@@ -290,7 +306,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     setUniqueViolationAlert(null);
     setIsSubmitting(false);
     setActiveStep(1);
-  }, [editingParcel, defaultBarangay, effectiveDefaultBarangay, initialCoords, isOpen]);
+  }, [editingParcel, defaultBarangay, effectiveDefaultBarangay, initialCoords, isOpen, initialFarmer]);
 
   useEffect(() => {
     if (reviewScrollRef.current) reviewScrollRef.current.scrollTop = 0;
@@ -311,8 +327,9 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
   // 1. Real-time Duplicate Check for RSBSA Number (both local state and Supabase query)
   useEffect(() => {
+    if (!isOpen) return;
     const inputRsbsa = (formData.swineNameOrId || '').trim();
-    if (linkedTag || editingParcel) { setDuplicateRsbsaMatch(null); return; }
+    if (linkedKey || editingParcel) { setDuplicateRsbsaMatch(null); setIsCheckingRsbsa(false); return; }
     if (!inputRsbsa || inputRsbsa.toUpperCase() === 'NO RSBSA') {
       setDuplicateRsbsaMatch(null);
       setIsCheckingRsbsa(false);
@@ -324,12 +341,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       if (editingParcel && (p.tagNumber === editingParcel.tagNumber || p.swineNameOrId === editingParcel.swineNameOrId)) {
         return false;
       }
-      const existingRsbsa = (p.swineNameOrId || '').trim();
-      return (
-        existingRsbsa &&
-        existingRsbsa.toUpperCase() !== 'NO RSBSA' &&
-        existingRsbsa.toLowerCase() === inputRsbsa.toLowerCase()
-      );
+      return farmerReference(p) === rsbsaReference(inputRsbsa);
     });
 
     if (localMatch) {
@@ -369,11 +381,11 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       isCancelled = true;
       clearTimeout(timer);
     };
-  }, [linkedTag, formData.swineNameOrId, parcels, editingParcel]);
+  }, [isOpen, linkedKey, formData.swineNameOrId, parcels, editingParcel]);
 
   // 2. Strict Real-Time Duplicate Farmer Name Checking & Normalization
   useEffect(() => {
-    if (linkedTag || editingParcel) { setDuplicateNameMatch(null); return; }
+    if (linkedKey || editingParcel) { setDuplicateNameMatch(null); setIsCheckingName(false); return; }
     const fam = (formData.farmerFamilyName || '').trim();
     const giv = (formData.farmerGivenName || '').trim();
     const mid = (formData.farmerMiddleName || '').trim();
@@ -532,7 +544,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     formData.swineNameOrId,
     parcels,
     editingParcel,
-    effectiveDefaultBarangay, linkedTag
+    effectiveDefaultBarangay, linkedKey
   ]);
 
   // Keep Full Name synchronized cleanly without leaving trailing commas
@@ -634,32 +646,33 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     const targetBrgy = formData.barangay || effectiveDefaultBarangay;
 
     if (step === 1) {
+      if (linkedKey && !linkedFarmer) return 'The selected farmer is no longer available. Select an existing farmer again.';
       const reference = rsbsaReference(linkedFarmer?.swineNameOrId ?? formData.swineNameOrId);
       if (!editingParcel && !linkedFarmer && reference && reference !== 'NO RSBSA' && !isRsbsaReference(reference)) {
         return 'Enter the RSBSA reference in 00-00-00-000-000000 format.';
       }
       if (
-        formSchema.isVisible('reg-family-name') &&
+        !linkedFarmer && formSchema.isVisible('reg-family-name') &&
         formSchema.isRequired('reg-family-name') &&
         !formData.farmerFamilyName?.trim()
       ) {
         return `${formSchema.getLabel('reg-family-name', 'Family Name')} is required.`;
       }
       if (
-        formSchema.isVisible('reg-given-name') &&
+        !linkedFarmer && formSchema.isVisible('reg-given-name') &&
         formSchema.isRequired('reg-given-name') &&
         !formData.farmerGivenName?.trim()
       ) {
         return `${formSchema.getLabel('reg-given-name', 'Given Name')} is required.`;
       }
       if (
-        formSchema.isVisible('reg-middle-name') &&
+        !linkedFarmer && formSchema.isVisible('reg-middle-name') &&
         formSchema.isRequired('reg-middle-name') &&
         !formData.farmerMiddleName?.trim()
       ) {
         return `${formSchema.getLabel('reg-middle-name', 'Middle Name')} is required.`;
       }
-      if (formSchema.isVisible('reg-suffix') && formSchema.isRequired('reg-suffix') && !formData.farmerSuffix?.trim()) {
+      if (!linkedFarmer && formSchema.isVisible('reg-suffix') && formSchema.isRequired('reg-suffix') && !formData.farmerSuffix?.trim()) {
         return `${formSchema.getLabel('reg-suffix', 'Suffix')} is required.`;
       }
       if (!formData.farmerFamilyName?.trim() && !formData.farmerGivenName?.trim() && !formData.raiserName?.trim()) {
@@ -690,7 +703,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
         return 'Contact Number must be a valid 11-digit mobile number starting with 09 (e.g. 09XXXXXXXXX).';
       }
       if (
-        formSchema.isVisible('reg-birthday') &&
+        !linkedFarmer && formSchema.isVisible('reg-birthday') &&
         formSchema.isRequired('reg-birthday') &&
         !formData.birthday
       ) {
@@ -886,7 +899,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
           'farmerGivenName', 'farmerMiddleName', 'farmerSuffix', 'birthday'] as const) {
           if (linkedFarmer) finalParcel[field] = source[field] || '';
         }
-        finalParcel.farmerGroupId = farmerKey(source);
+        finalParcel.farmerGroupId = source.farmerGroupId || farmerKey(source);
+        finalParcel.registeredFarmerName = source.registeredFarmerName;
       } else {
         const reference = rsbsaReference(finalParcel.swineNameOrId);
         finalParcel.swineNameOrId = finalParcel.rsbsa_no = reference || 'NO RSBSA';
@@ -931,6 +945,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
         err?.details?.includes('23505');
 
       if (isUniqueViolation) {
+        if (linkedFarmer) void fetchParcels();
         setUniqueViolationAlert(
           err?.message || 'Duplicate farmer or farm parcel.'
         );
@@ -1025,94 +1040,68 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
 
           <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
-            <div ref={reviewScrollRef} className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 bg-slate-100/70">
-              {error && (
-                <div className="p-3 bg-red-50 border border-red-300 rounded-md flex items-center gap-2 text-xs text-red-800">
-                  <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
-                  <span>{error}</span>
-                </div>
-              )}
-
-              {/* Duplicate RSBSA Validation Notice */}
-              {uniqueViolationAlert && (
-                <div className="p-3.5 bg-red-50 border border-red-300 rounded-md flex flex-col sm:flex-row items-start justify-between gap-3 text-xs text-red-900">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                    <div>
-                      <h4 className="font-bold text-red-900 text-xs uppercase tracking-wide">
-                        Duplicate Record Notice
-                      </h4>
-                      <p className="text-red-800 mt-0.5 text-xs leading-relaxed">
-                        {uniqueViolationAlert}
-                      </p>
-                    </div>
+            {(error || (activeStep === 1 && duplicateRsbsaMatch) || (showNameDuplicateToast && duplicateNameMatch)) && (
+              <div className="sticky top-0 z-30 shrink-0 bg-white px-4 py-2 shadow-md" role="alert">
+                {error && (
+                  <div className="p-3 bg-red-50 border border-red-300 rounded-md flex items-center gap-2 text-xs text-red-800">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
+                    <span>{error}</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUniqueViolationAlert(null);
-                      setDuplicateRsbsaMatch(null);
-                    }}
-                    className="px-3 py-1 bg-white border border-red-300 hover:bg-red-100 text-red-800 font-semibold rounded-md transition cursor-pointer text-[11px] shrink-0"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              )}
+                )}
 
+                {!error && activeStep === 1 && duplicateRsbsaMatch && (
+                  <div className="flex items-center gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-xs text-red-800">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
+                    <span>This RSBSA number is registered under <strong>{duplicateRsbsaMatch.farmerName}</strong>. Select that farmer to add a parcel.</span>
+                  </div>
+                )}
+
+                {/* Full Name & Barangay Duplicate Warning */}
+                {showNameDuplicateToast && duplicateNameMatch && (
+                  <div className="p-3 bg-amber-50 border border-amber-300 rounded-md flex items-start justify-between gap-3 text-xs text-amber-950">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                      <div className="leading-snug">
+                        <p className="font-semibold text-amber-950 text-xs">
+                          Duplicate Name Notice: A farmer named &lsquo;{duplicateNameMatch.existingName}&rsquo; is already registered in Barangay {duplicateNameMatch.barangay}.
+                        </p>
+                        <p className="text-amber-900 mt-0.5 text-[11px]">
+                          Please confirm below whether this is the same person or a distinct farmer.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowNameDuplicateToast(false)}
+                      className="text-amber-700 hover:text-amber-950 p-1 rounded-md hover:bg-amber-100 transition shrink-0 cursor-pointer"
+                      title="Close notice"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            <div ref={reviewScrollRef} className="isolate min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-100/70 p-4 sm:p-5">
               {activeStep === 1 && editingParcel && <OfficeRegistryVerification key={editingParcel.tagNumber} parcel={editingParcel} />}
               {activeStep === 1 && !editingParcel && (
-                <label className="block space-y-1">
-                  <span className={OFFICE_LABEL_CLASS}>Farmer record</span>
-                  <select className={OFFICE_SELECT_CLASS} value={linkedTag} onChange={(event) => {
-                    const tag = event.target.value;
-                    setLinkedTag(tag);
-                    setDuplicateNameMatch(null);
-                    setDuplicateRsbsaMatch(null);
-                    setUniqueViolationAlert(null);
-                    const farmer = parcels.find(p => p.tagNumber === tag);
-                    setFormData(previous => ({
-                      ...previous,
-                      farmerFamilyName: farmer?.farmerFamilyName || '', farmerGivenName: farmer?.farmerGivenName || '',
-                      farmerMiddleName: farmer?.farmerMiddleName || '', farmerSuffix: farmer?.farmerSuffix || '',
-                      raiserName: farmer?.raiserName || '', swineNameOrId: farmer?.swineNameOrId || '',
-                      birthday: farmer?.birthday || '', contactNumber: farmer?.contactNumber || '', photoUrl: farmer?.photoUrl,
-                      address: farmer?.address || previous.address,
-                      residential_address: farmer?.residential_address || farmer?.address || previous.residential_address
-                    }));
-                  }}>
-                    <option value="">Register a new farmer</option>
-                    {groupFarmerParcels(parcels.filter(p => isUserAuthorizedForBarangay(currentUser, p.barangay))).map(p =>
-                      <option key={p.tagNumber} value={p.tagNumber}>{p.raiserName} · {p.swineNameOrId || p.tagNumber}</option>
-                    )}
-                  </select>
-                </label>
-              )}
-              {/* Full Name & Barangay Duplicate Warning */}
-              {showNameDuplicateToast && duplicateNameMatch && (
-                <div className="p-3 bg-amber-50 border border-amber-300 rounded-md flex items-start justify-between gap-3 text-xs text-amber-950">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                    <div className="leading-snug">
-                      <p className="font-semibold text-amber-950 text-xs">
-                        Duplicate Name Notice: A farmer named &lsquo;{duplicateNameMatch.existingName}&rsquo; is already registered in Barangay {duplicateNameMatch.barangay}.
-                      </p>
-                      <p className="text-amber-900 mt-0.5 text-[11px]">
-                        Please confirm below whether this is the same person or a distinct farmer.
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowNameDuplicateToast(false)}
-                    className="text-amber-700 hover:text-amber-950 p-1 rounded-md hover:bg-amber-100 transition shrink-0 cursor-pointer"
-                    title="Close notice"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                <div className="space-y-2">
+                  <FarmerCombobox parcels={existingFarms} value={linkedKey} label="Existing Farmer"
+                    clearLabel="Register a new farmer" onChange={key => {
+                      if (key === linkedKey) return;
+                      setLinkedKey(key);
+                      setDuplicateNameMatch(null);
+                      setNameDuplicateResolution('unresolved');
+                      setShowNameDuplicateToast(false);
+                      setError(null);
+                      setDuplicateRsbsaMatch(null);
+                      setUniqueViolationAlert(null);
+                      const farmer = existingFarms.find(parcel => farmerKey(parcel) === key);
+                      setFormData(previous => ({ ...previous, ...farmerProfile(farmer) }));
+                    }} />
+                  {linkedFarmer && <span className="block text-xs font-semibold text-emerald-800">Adding {nextFarmLabels[0]}</span>}
                 </div>
               )}
-
               {/* ========================================================
                   SECTION 1: FARMER & RSBSA IDENTIFICATION
                   ======================================================== */}
@@ -1138,6 +1127,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                         <input
                           type="text"
                           required={formSchema.isRequired('reg-rsbsa')}
+                          readOnly={Boolean(linkedFarmer)}
                           value={formData.swineNameOrId || ''}
                           onChange={(e) => setFormData({ ...formData, swineNameOrId: e.target.value })}
                           placeholder={formSchema.getPlaceholder(
@@ -1150,15 +1140,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                               : ''
                           }`}
                         />
-                        {duplicateRsbsaMatch && (
-                          <div className="mt-1 p-2 bg-red-50 border border-red-300 rounded-md flex items-start gap-1.5 text-[11px] text-red-800">
-                            <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0 mt-0.5" />
-                            <span>
-                              Already registered under{' '}
-                              <strong className="underline">{duplicateRsbsaMatch.farmerName}</strong>.
-                            </span>
-                          </div>
-                        )}
+
                       </div>
                     )}
 
@@ -1240,7 +1222,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                         </label>
                         <input
                           type="text"
-                          required={formSchema.isRequired('reg-family-name')}
+                          required={!linkedFarmer && formSchema.isRequired('reg-family-name')}
+                          readOnly={Boolean(linkedFarmer)}
                           value={formData.farmerFamilyName || ''}
                           onChange={(e) => handleNameChange('family', e.target.value)}
                           placeholder={formSchema.getPlaceholder('reg-family-name', 'e.g. ALAS')}
@@ -1259,7 +1242,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                         </label>
                         <input
                           type="text"
-                          required={formSchema.isRequired('reg-given-name')}
+                          required={!linkedFarmer && formSchema.isRequired('reg-given-name')}
+                          readOnly={Boolean(linkedFarmer)}
                           value={formData.farmerGivenName || ''}
                           onChange={(e) => handleNameChange('given', e.target.value)}
                           placeholder={formSchema.getPlaceholder('reg-given-name', 'e.g. MARIO')}
@@ -1278,7 +1262,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                         </label>
                         <input
                           type="text"
-                          required={formSchema.isRequired('reg-middle-name')}
+                          required={!linkedFarmer && formSchema.isRequired('reg-middle-name')}
+                          readOnly={Boolean(linkedFarmer)}
                           value={formData.farmerMiddleName || ''}
                           onChange={(e) => handleNameChange('middle', e.target.value)}
                           placeholder={formSchema.getPlaceholder('reg-middle-name', 'e.g. CABUG-OS')}
@@ -1297,7 +1282,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                           type="text"
                           list={`${suffixId}-options`}
                           maxLength={24}
-                          required={formSchema.isRequired('reg-suffix')}
+                          required={!linkedFarmer && formSchema.isRequired('reg-suffix')}
+                          readOnly={Boolean(linkedFarmer)}
                           value={formData.farmerSuffix || ''}
                           onChange={(e) => handleNameChange('suffix', e.target.value.replace(/,/g, ''))}
                           placeholder={formSchema.getPlaceholder('reg-suffix', 'None')}
@@ -1390,7 +1376,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                         </label>
                         <input
                           type="date"
-                          required={formSchema.isRequired('reg-birthday')}
+                          required={!linkedFarmer && formSchema.isRequired('reg-birthday')}
+                          readOnly={Boolean(linkedFarmer)}
                           value={formData.birthday || ''}
                           onChange={(e) => setFormData({ ...formData, birthday: e.target.value })}
                           className={OFFICE_INPUT_CLASS}
@@ -1967,7 +1954,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
       {/* Supabase 23505 Unique Violation Notice Dialog */}
       {uniqueViolationAlert && (
-        <div className="fixed inset-0 z-70 bg-slate-950/70 flex items-center justify-center p-4">
+        <div role="alertdialog" aria-modal="true" aria-label="Duplicate record blocked" className="fixed inset-0 z-[9999] bg-slate-950/70 flex items-center justify-center p-4">
           <div className="bg-white border border-red-400 rounded-lg w-full max-w-md shadow-2xl p-5 text-center space-y-4">
             <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
               <AlertTriangle className="w-6 h-6" />

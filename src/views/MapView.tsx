@@ -1,4 +1,4 @@
-import { farmLabel } from '../data/officeRegistry';
+import { farmLabel, farmerKey } from '../data/officeRegistry';
 import { formatRegistryName } from '../data/registryPreferences';
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import L from 'leaflet';
@@ -360,7 +360,8 @@ export const MapView: React.FC<MapViewProps> = ({
   focusParcel,
   onOpenLogin
 }) => {
-  const { parcels, currentUser, lftAccounts, barangayProfiles, registryPreferences, t } = useApp();
+  const { parcels: registryParcels, currentUser, lftAccounts, barangayProfiles, registryPreferences, t } = useApp();
+  const parcels = useMemo(() => registryParcels.filter(parcel => !parcel.isArchived && !parcel.is_archived), [registryParcels]);
   const isAuthorized = Boolean(currentUser && onOpenAddParcelWithCoords);
   const isBarangayScoped = Boolean(currentUser && currentUser.role !== 'Central Admin');
   const assignedBarangays = useMemo(() => {
@@ -556,7 +557,7 @@ export const MapView: React.FC<MapViewProps> = ({
   const analyticsSummary = useMemo(() => {
     const totalParcels = filteredParcels.length;
     const totalAreaHa = filteredParcels.reduce((sum, parcel) => sum + getParcelAreaHa(parcel), 0);
-    const uniqueFarmers = new Set(filteredParcels.map((p) => p.raiserName.trim().toUpperCase())).size;
+    const uniqueFarmers = new Set(filteredParcels.map(farmerKey)).size;
 
     let irrigatedHa = 0;
     let rainfedHa = 0;
@@ -1331,9 +1332,8 @@ export const MapView: React.FC<MapViewProps> = ({
     filteredParcels.forEach((parcel) => {
       const location = sanitizeSilagoCoordinates(parcel.lat, parcel.lng, parcel.barangay, parcel.tagNumber);
       if (location.lat === null || location.lng === null) return;
-      const farmerKey = parcel.raiserName.trim().toLocaleLowerCase();
-      const key = `${farmerKey}:${location.lat.toFixed(5)}:${location.lng.toFixed(5)}`;
-      if (!farmerKey || seen.has(key)) return;
+      const key = `${farmerKey(parcel)}:${location.lat.toFixed(5)}:${location.lng.toFixed(5)}`;
+      if (seen.has(key)) return;
       seen.add(key);
       const icon = L.divIcon({
         className: 'silago-farmer-location-marker',
@@ -1820,7 +1820,7 @@ export const MapView: React.FC<MapViewProps> = ({
   const selectedBarangayRecords = customizerBarangay
     ? visibleParcels.filter((parcel) => matchBarangay(parcel.barangay, customizerBarangay.name))
     : [];
-  const selectedBarangayFarmers = new Set(selectedBarangayRecords.map((parcel) => parcel.raiserName.trim().toLowerCase()).filter(Boolean)).size;
+  const selectedBarangayFarmers = new Set(selectedBarangayRecords.map(farmerKey)).size;
   const selectedBarangayMapped = selectedBarangayRecords.filter((parcel) => {
     const point = sanitizeSilagoCoordinates(parcel.lat, parcel.lng, parcel.barangay, parcel.tagNumber);
     return point.lat !== null && point.lng !== null;

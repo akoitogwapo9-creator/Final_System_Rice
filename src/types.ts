@@ -20,6 +20,7 @@ export interface SeasonalProductionRecord {
   parcelTag: string; // Foreign key linking to FarmParcel.tagNumber
   season: string; // e.g. "Wet Season (WS) 2026", "Dry Season (DS) 2026"
   seasonName?: string; // e.g. "Dry Season (DS) 2025", "Wet Season (WS) 2025"
+  seedQuantityKg?: number;
   seedVariety: string; // e.g. "NSIC Rc 222", "NSIC Rc 488H"
   varietyPlanted?: string; // alias for seedVariety (e.g. "NSIC Rc 222")
   seedType: 'INBRED' | 'HYBRID' | 'UNKNOWN' | '';
@@ -51,6 +52,7 @@ export interface SeasonalProductionRecord {
 export interface FarmParcel {
   farmLabel?: string;
   farmerGroupId?: string;
+  registeredFarmerName?: string;
   parcelVerificationStatus?: typeof import('./data/officeRegistry').VERIFICATION_STATUSES[number];
   farmerVerificationStatus?: FarmParcel['parcelVerificationStatus'];
   parcelVerifiedBy?: string;
