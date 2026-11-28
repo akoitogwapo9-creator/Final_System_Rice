@@ -1381,7 +1381,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       <div className="overflow-x-auto rounded border border-gov-line bg-white">
         {/* Scrollable Container with Sticky Header, Sticky Left Columns, and Visible Scrollbar */}
         <div className="custom-table-scrollbar w-full overflow-x-auto overflow-y-auto max-h-[calc(100vh-240px)] min-h-[400px] divide-y divide-gov-line/60 relative">
-          <table className="w-full min-w-[740px] table-fixed text-left text-xs">
+          <table className="w-full min-w-[950px] table-fixed text-left text-xs">
             <thead className="sticky top-0 z-20 bg-gov-canvas text-gov-muted shadow-sm">
               <tr>
                 <th className="w-10 p-3 text-center">
@@ -1396,15 +1396,16 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                 </th>
                 <th className="w-36 p-3">RSBSA Number</th>
                 <th className="p-3">Farmer Name</th>
+                <th className="w-40 p-3">Farm Locations</th>
                 <th className="w-24 p-3">Farm Count</th>
                 <th className="w-28 p-3">Total Area (ha)</th>
-                <th className="w-64 p-3">Actions</th>
+                <th className="w-56 p-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-200/80 text-stone-700 bg-white">
               {filteredParcels.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-14 text-center text-stone-400 font-medium">
+                  <td colSpan={7} className="py-14 text-center text-stone-400 font-medium">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Search className="w-8 h-8 text-stone-300 stroke-1" />
                       <p className="text-sm font-semibold text-stone-700">
@@ -1429,6 +1430,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               ) : (
                 paginatedFarmers.map(({ key, farms, matching }) => {
                   const farmer = farms[0];
+                  const farmerPhoto = getFarmerPhoto(farmer);
+                  const locations = [...new Set(farms.filter(parcel => parcel.barangay?.trim()).map(parcel =>
+                    getBarangayLabel(getDisplayBarangay(parcel.barangay), barangayProfiles)))].sort((a, b) => a.localeCompare(b));
                   const authorizedFarm = farms.find(parcel => isUserAuthorizedForBarangay(currentUser, parcel.barangay));
                   const expanded = expandedFarmers.has(key);
                   const area = farms.reduce((sum, parcel) => sum + Number(parcel.areaHa ?? parcel.weightKg ?? 0), 0);
@@ -1446,7 +1450,26 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                           }} />
                       </td>
                       <td className="p-3 font-mono">{farmerReference(farmer) || 'NO RSBSA'}</td>
-                      <th scope="row" className="p-3">{getFarmerDisplayName(farmer)}</th>
+                      <th scope="row" className="p-3">
+                        <div className="flex items-center gap-2">
+                          <button type="button" aria-label="View farmer photo"
+                            className="shrink-0 rounded border border-gov-line p-0.5 hover:border-gov-green"
+                            onClick={event => {
+                              event.stopPropagation();
+                              setPhotoPreview({ isOpen: true, photoUrl: farmerPhoto, photoType: 'profile', parcel: farmer });
+                            }}>
+                            <SafeImage src={farmerPhoto} alt="" fallbackType="farmer" className="h-6 w-6 rounded-sm object-cover" />
+                          </button>
+                          <span>{getFarmerDisplayName(farmer)}</span>
+                        </div>
+                      </th>
+                      <td className="p-3">
+                        {locations.length ? (
+                          <ul className="space-y-1">
+                            {locations.map(location => <li key={location}>{location}</li>)}
+                          </ul>
+                        ) : <span className="text-gov-muted">Unrecorded</span>}
+                      </td>
                       <td className="p-3"><span className="rounded-full bg-emerald-100 px-2 py-1 font-semibold text-emerald-900">
                         {farms.length} {farms.length === 1 ? 'Farm' : 'Farms'}
                       </span></td>
@@ -1463,12 +1486,12 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                         </div>
                       </td>
                     </tr>
-                    {expanded && <tr><td colSpan={6} className="bg-slate-50 p-3">
+                    {expanded && <tr><td colSpan={7} className="bg-slate-50 p-3">
                       <div className="overflow-x-auto">
                         <table aria-label={`${farmer.raiserName} farm parcels`} className="w-full min-w-[1200px] border-collapse text-left">
                           <thead className="bg-gov-canvas text-gov-muted">
                             <tr className="border-b border-gov-line text-[10px] uppercase tracking-wider">
-                              {['Select parcel', 'Farm Parcel', 'Farmer Name', 'Barangay', 'Rice Variety', 'Tenure',
+                              {['Select parcel', 'Farm Parcel', 'Barangay', 'Rice Variety', 'Tenure',
                                 'Area (ha)', 'Production (MT)', 'Ecosystem', 'Date', 'Verification', 'Actions'].map((label, index) => (
                                 <th key={label} scope="col" className="whitespace-nowrap px-3 py-2">
                                   <span className={index === 0 ? 'sr-only' : undefined}>{label}</span>
@@ -1481,8 +1504,6 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                   const isAuthorized = isUserAuthorizedForBarangay(currentUser, parcel.barangay);
                   const isEditing = editingTag === parcel.tagNumber && inlineEditData !== null;
                   const isSelected = selectedTags.includes(parcel.tagNumber);
-                  const farmerPhoto = getFarmerPhoto(parcel);
-                  const farmLocation = getFarmLocation(parcel);
                   const rowBg = idx % 2 === 1 ? 'bg-[#f8fafc]' : 'bg-white';
                   const hasGpsCoordinates = Boolean(
                     parcel.lat &&
@@ -1511,8 +1532,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                           <span className="w-4 h-4 inline-block bg-stone-200/50 rounded border border-stone-300"></span>
                         </td>
 
-                        {/* 2. PARCEL ID TAG */}
-                        <td className="w-40 min-w-[150px] py-2 px-2 whitespace-nowrap border-r border-amber-300">
+                        {/* Parcel identity and farmer details */}
+                        <td className="min-w-[220px] space-y-2 px-2 py-2 border-r border-amber-300">
+                          <span className="block font-semibold">{farmLabel(parcel)} · {parcel.tagNumber}</span>
                           <input
                             type="text"
                             value={inlineEditData.swineNameOrId}
@@ -1522,10 +1544,6 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                             className="w-full px-1.5 py-1 bg-white border border-emerald-400 rounded text-[11px] font-mono font-bold text-stone-900 focus:ring-2 focus:ring-emerald-600 shadow-2xs text-center"
                             placeholder="08-64-16-002-XXXXXX"
                           />
-                        </td>
-
-                        {/* 3. FARMER NAME */}
-                        <td className="w-56 min-w-[210px] py-2 px-2 whitespace-nowrap border-r border-amber-300">
                           <div className="flex flex-col gap-1 min-w-0">
                             <input
                               type="text"
@@ -1730,44 +1748,10 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                         </div>
                       </td>
 
-                      {/* 3. FARMER NAME */}
-                      <td className="w-56 min-w-[210px] py-2 px-3 whitespace-nowrap border-r border-stone-200">
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setPhotoPreview({
-                                isOpen: true,
-                                photoUrl: farmerPhoto,
-                                photoType: 'profile',
-                                parcel
-                              });
-                            }}
-                            className="relative shrink-0 p-0.5 rounded border border-gov-line hover:border-gov-green transition cursor-pointer"
-                            title="Click to view full photo"
-                          >
-                            <SafeImage
-                              src={farmerPhoto}
-                              alt={parcel.raiserName}
-                              fallbackType="farmer"
-                              className="w-6 h-6 rounded-sm object-cover"
-                            />
-                          </button>
-                          <div className="flex flex-col min-w-0">
-                            <span
-                              className="font-bold text-gov-ink text-xs truncate block max-w-[170px]"
-                              title={getFarmerDisplayName(parcel)}
-                            >
-                              {getFarmerDisplayName(parcel)}
-                            </span>
-                          </div>
-                        </div>
-                      </td>
-
                       {/* 4. BARANGAY */}
                       <td className="w-36 min-w-[130px] py-2 px-3 whitespace-nowrap text-xs font-semibold text-gov-ink border-r border-stone-200">
                         {getBarangayLabel(getDisplayBarangay(parcel.barangay), barangayProfiles)}
+                        {parcel.purok?.trim() && <span className="block font-normal text-gov-muted">{parcel.purok}</span>}
                       </td>
 
                       {/* 5. RICE VARIETY */}
