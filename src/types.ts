@@ -52,6 +52,7 @@ export interface SeasonalProductionRecord {
 export interface FarmParcel {
   farmLabel?: string;
   farmerGroupId?: string;
+  registeredFarmerName?: string;
   parcelVerificationStatus?: typeof import('./data/officeRegistry').VERIFICATION_STATUSES[number];
   farmerVerificationStatus?: FarmParcel['parcelVerificationStatus'];
   parcelVerifiedBy?: string;

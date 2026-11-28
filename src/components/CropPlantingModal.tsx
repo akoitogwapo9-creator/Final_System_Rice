@@ -45,6 +45,15 @@ const EMPTY_CROP_DATA = {
   targetYieldMt: ''
 };
 
+function emptyCropForParcel(parcel?: FarmParcel | null) {
+  return {
+    ...EMPTY_CROP_DATA,
+    purpose: getRecordedCropValue(parcel?.ecosystem, parcel?.purpose),
+    sex: getRecordedCropValue(parcel?.tenure, parcel?.sex),
+    irrigationAssociation: getRecordedCropValue(parcel?.irrigationAssociation)
+  };
+}
+
 /**
  * Municipal Agriculture Office Crop Variety & Planting Schedule Form.
  * Shows the complete office-style crop entry form immediately on open with a
@@ -90,7 +99,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
 
   const populateFromParcel = (parcel: FarmParcel) => {
     const draft = drafts[parcel.tagNumber];
-    setCropData(draft?.crop || EMPTY_CROP_DATA);
+    setCropData(draft?.crop || emptyCropForParcel(parcel));
     setCustomValues(draft?.custom || parcel.customFields || getParcelCustomFields(parcel.tagNumber));
   };
 
@@ -104,7 +113,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
     if (initialParcel) {
       setSelectedFarmer(farmerKey(initialParcel));
       setSelectedTag(farmerOnly ? '' : initialParcel.tagNumber);
-      setCropData(EMPTY_CROP_DATA);
+      setCropData(emptyCropForParcel(farmerOnly ? null : initialParcel));
       setCustomValues(farmerOnly ? {} : initialParcel.customFields || getParcelCustomFields(initialParcel.tagNumber));
     } else {
       setSelectedFarmer('');
@@ -141,16 +150,16 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
     setCropData((previous) => {
       if (!record) {
         const editingExisting = selectedParcel && previous.croppingSeason && getSeasonRecord(selectedParcel, previous.croppingSeason);
-        return { ...(editingExisting ? EMPTY_CROP_DATA : previous), croppingSeason: season };
+        return { ...(editingExisting ? emptyCropForParcel(selectedParcel) : previous), croppingSeason: season };
       }
       return {
         seedQuantityKg: record.seedQuantityKg == null ? '' : String(record.seedQuantityKg),
         croppingSeason: season,
         breed: getRecordedCropValue(record.seedVariety),
         seedType: getRecordedCropValue(record.seedType),
-        purpose: record.ecosystem ?? (isCurrent ? selectedParcel.purpose : ''),
-        irrigationAssociation: record.irrigationAssociation ?? (isCurrent ? selectedParcel.irrigationAssociation || '' : ''),
-        sex: record.tenure ?? (isCurrent ? selectedParcel.sex : ''),
+        purpose: getRecordedCropValue(record.ecosystem, selectedParcel?.ecosystem, selectedParcel?.purpose),
+        irrigationAssociation: getRecordedCropValue(record.irrigationAssociation, selectedParcel?.irrigationAssociation),
+        sex: getRecordedCropValue(record.tenure, selectedParcel?.tenure, selectedParcel?.sex),
         plantingDate: record.plantingDate,
         targetYieldMt: target == null ? '' : String(target)
       };
@@ -245,8 +254,8 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
         standingCropStage: phenology?.stage || '',
         ageMonths: phenology?.dap || 0,
         irrigationAssociation: cropData.irrigationAssociation,
-        sex: cropData.sex,
-        tenure: cropData.sex
+        sex: getRecordedCropValue(cropData.sex, latestParcel.tenure, latestParcel.sex),
+        tenure: getRecordedCropValue(cropData.sex, latestParcel.tenure, latestParcel.sex)
       },
       customFields: mergedCustomValues
     };
@@ -502,6 +511,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                         className={OFFICE_SELECT_CLASS}
                       >
                         <option value="">-- Select / N/A --</option>
+                        {cropData.purpose && !ecosystems.includes(cropData.purpose) && <option>{cropData.purpose}</option>}
                         {ecosystems.map((eco) => (
                           <option key={eco} value={eco}>
                             {eco}
@@ -533,6 +543,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                         className={OFFICE_SELECT_CLASS}
                       >
                         <option value="">-- Select / N/A --</option>
+                        {cropData.irrigationAssociation && !irrigationAssociations.includes(cropData.irrigationAssociation) && <option>{cropData.irrigationAssociation}</option>}
                         {irrigationAssociations.map((ia) => (
                           <option key={ia} value={ia}>
                             {ia}
@@ -560,6 +571,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                         className={OFFICE_SELECT_CLASS}
                       >
                         <option value="">-- Select / N/A --</option>
+                        {cropData.sex && !tenures.includes(cropData.sex) && <option>{cropData.sex}</option>}
                         {tenures.map((ten) => (
                           <option key={ten} value={ten}>
                             {ten}

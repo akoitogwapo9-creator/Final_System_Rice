@@ -31,6 +31,16 @@ export function farmLabel(parcel: FarmParcel) {
   return parcel.farmLabel || 'Farm 1';
 }
 
+export function nextAvailableFarmLabels(parcels: FarmParcel[], count: number) {
+  const existing = new Set(parcels.map(parcel => farmLabel(parcel)));
+  const labels: string[] = [];
+  for (let number = 1; labels.length < count; number++) {
+    const label = `Farm ${number}`;
+    if (!existing.has(label)) labels.push(label);
+  }
+  return labels;
+}
+
 export function boundaryKey(boundary?: [number, number][]) {
   const points = (boundary || []).map(([lat, lng]) => `${lat.toFixed(6)},${lng.toFixed(6)}`);
   return [...new Set(points)].sort().join('|');

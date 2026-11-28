@@ -782,8 +782,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     return mapFarmerRowToParcel(row);
   }, []);
 
+  const parcelFetchId = useRef(0);
+  const parcelMutationVersion = useRef(0);
+
   // Fetch Parcels: reads directly from 'farmers' table using supabase.from("farmers").select("*")
   const fetchParcels = useCallback(async () => {
+    if (activeParcelOwner.current !== parcelOwner) return;
+    const fetchId = ++parcelFetchId.current;
+    const mutationVersion = parcelMutationVersion.current;
+    const canApply = () => activeParcelOwner.current === parcelOwner &&
+      parcelFetchId.current === fetchId && parcelMutationVersion.current === mutationVersion;
     if (!parcelOwner) {
       setParcels([]);
       setIsParcelsLoading(false);
@@ -799,14 +807,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         mapped.push(...data.map(mapFarmerToParcel));
         if (data.length < size) break;
       }
-      if (activeParcelOwner.current !== parcelOwner) return;
+      if (!canApply()) return;
       const indexed = new Map(mapped.map(parcel => [parcel.tagNumber, parcel]));
       for (const pending of getOfflinePendingFarms()) indexed.set(pending.tagNumber, pending);
       const sorted = sortParcelsAlphabetically([...indexed.values()]);
       setParcels(sorted);
       cacheParcels(sorted);
     } catch (error) {
-      if (activeParcelOwner.current !== parcelOwner) return;
+      if (!canApply()) return;
       console.warn('Registry fetch used the staff cache:', error);
       try {
         const snapshot = JSON.parse(localStorage.getItem(parcelCacheKey) || '[]');
@@ -820,7 +828,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         setParcels(getOfflinePendingFarms());
       }
     } finally {
-      if (activeParcelOwner.current === parcelOwner) setIsParcelsLoading(false);
+      if (activeParcelOwner.current === parcelOwner && parcelFetchId.current === fetchId) setIsParcelsLoading(false);
     }
   }, [parcelOwner, parcelCacheKey, mapFarmerToParcel, cacheParcels]);
 
@@ -846,11 +854,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     return () => { active = false; };
   }, [currentUser?.id, currentUser?.role]);
 
-  // Initial cloud fetch on mount
-  useEffect(() => {
-    fetchParcels();
-  }, [fetchParcels]);
-
   // Manual & Automated Trigger to re-sync with Supabase tables directly
   const syncWithSupabase = useCallback(async () => {
     setIsRealtimeSyncing(true);
@@ -859,14 +862,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         fetchParcels(),
         supabaseDb.getLftAccounts(),
       ]);
-      setLftAccounts(cloudLfts);
+      if (activeParcelOwner.current === parcelOwner) setLftAccounts(cloudLfts);
     } catch (err) {
       console.warn('Manual sync note:', err);
     } finally {
-      setIsRealtimeSyncing(false);
-      setIsParcelsLoading(false);
+      if (activeParcelOwner.current === parcelOwner) setIsRealtimeSyncing(false);
     }
-  }, [fetchParcels]);
+  }, [fetchParcels, parcelOwner]);
 
   // Manual & Automated Trigger to sync offline pending queue to Supabase
   const syncOfflineQueue = useCallback(async () => {
@@ -917,7 +919,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     const handleOnline = () => {
       setIsOnline(true);
       if (currentUser) {
-        void syncOfflineQueue();
+        void syncOfflineQueue().finally(fetchParcels);
       }
     };
 
@@ -945,7 +947,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         window.removeEventListener('offline', handleOffline);
       }
     };
-  }, [syncOfflineQueue, currentUser]);
+  }, [syncOfflineQueue, currentUser, fetchParcels]);
 
   // Handle App Settings updates from Realtime
   const handleSettingUpsert = useCallback((key: string, value: any) => {
@@ -1053,6 +1055,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   // Supabase Realtime Channels Subscription: listening for INSERT, UPDATE, DELETE on 'farms', 'farmers', and 'lft_technicians'
   useEffect(() => {
     let isMounted = true;
+    let reconnecting = false;
 
     // 1. Initial Cloud Hydration from Supabase
     syncWithSupabase();
@@ -1171,7 +1174,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         if (!isMounted) return;
         if (status === 'SUBSCRIBED') {
           setRealtimeStatus('connected');
+          if (reconnecting && parcelOwner) void fetchParcels();
+          reconnecting = false;
         } else if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+          reconnecting = true;
           setRealtimeStatus('reconnecting');
         } else {
           setRealtimeStatus('connecting');
@@ -1182,7 +1188,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, [syncWithSupabase, handleSettingUpsert, handleSettingDelete, cacheParcels, parcelOwner, mapFarmerToParcel]);
+  }, [syncWithSupabase, fetchParcels, handleSettingUpsert, handleSettingDelete, cacheParcels, parcelOwner, mapFarmerToParcel]);
 
   // Active Cropping Season (LFT Twice-a-Year Rice Production)
 
@@ -1210,6 +1216,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     try {
       const saved = await supabaseDb.upsertParcels(validated);
       if (activeParcelOwner.current !== parcelOwner) return;
+      parcelMutationVersion.current++;
       setParcels(previous => {
         const ids = new Set(saved.map(item => item.tagNumber));
         const updated = sortParcelsAlphabetically([...saved, ...previous.filter(item => !ids.has(item.tagNumber))]);
@@ -1236,6 +1243,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       try {
         const [saved] = await supabaseDb.upsertParcels([targetUpdated]);
         if (activeParcelOwner.current !== parcelOwner) return;
+        parcelMutationVersion.current++;
         setParcels(previous => {
           const updated = previous.some(parcel => parcel.tagNumber === tagNumber)
             ? previous.map(parcel => parcel.tagNumber === tagNumber ? saved : parcel)
@@ -1254,15 +1262,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   const deleteBulkParcels = async (tagNumbers: string[]) => {
     if (!canUserDeleteParcel(currentUser)) throw new Error('Only the MAO administrator can delete farm parcels.');
     if (!tagNumbers.length) return;
-    await supabaseDb.deleteBulkFarmRecords(tagNumbers);
+    const requested = [...new Set(tagNumbers)];
+    const pending = new Set(getOfflinePendingFarms().map(parcel => parcel.tagNumber));
+    const confirmed = await supabaseDb.deleteBulkFarmRecords(requested);
     if (activeParcelOwner.current !== parcelOwner) return;
-    const deleted = new Set(tagNumbers);
+    parcelMutationVersion.current++;
+    const deleted = new Set([...confirmed, ...requested.filter(tag => pending.has(tag))]);
     setParcels(previous => {
       const filtered = previous.filter(parcel => !deleted.has(parcel.tagNumber));
       cacheParcels(filtered);
       return filtered;
     });
     setOfflineQueueCount(getOfflinePendingFarms().length);
+    if (deleted.size !== requested.length) {
+      await fetchParcels();
+      throw new Error('Some selected parcels were already removed or could not be deleted. The registry has been refreshed.');
+    }
   };
 
   const deleteParcel = (tagNumber: string) => deleteBulkParcels([tagNumber]);

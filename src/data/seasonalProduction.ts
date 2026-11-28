@@ -64,9 +64,28 @@ export function isLegacyProductionEstimate(parcel: FarmParcel, record: SeasonalP
   return record.actualProductionVolumeMt === expected;
 }
 
-export function getRecordedCropValue(value?: string | null): string {
-  const text = typeof value === 'string' ? value.trim() : '';
-  return /^(?:n\/a|not yet assigned|not recorded|unknown|[-—])$/i.test(text) ? '' : text;
+export function getRecordedCropValue(...values: (string | null | undefined)[]): string {
+  for (const value of values) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (text && !/^(?:n\/a|not yet assigned|not recorded|unknown|[-—])$/i.test(text)) return text;
+  }
+  return '';
+}
+
+export function getParcelCropDetails(parcel: FarmParcel, season: string) {
+  const records = (parcel.seasonalRecords || []).filter(record => matchesSeasonFilter(record.season, season));
+  const crop = records[0];
+  const useParcelCrop = matchesSeasonFilter(parcel.croppingSeason || parcel.season, season);
+  const harvests = records.filter(hasActualProduction);
+  return {
+    variety: getRecordedCropValue(crop?.seedVariety, crop?.varietyPlanted,
+      useParcelCrop ? getRecordedCropValue(parcel.variety, parcel.breed) : '',
+      ...records.slice(1).map(record => getRecordedCropValue(record.seedVariety, record.varietyPlanted))),
+    seedType: getRecordedCropValue(crop?.seedType, useParcelCrop ? parcel.seedType : ''),
+    tenure: getRecordedCropValue(crop?.tenure, parcel.tenure, parcel.sex),
+    ecosystem: getRecordedCropValue(crop?.ecosystem, parcel.ecosystem, parcel.purpose),
+    productionMt: harvests.length ? harvests.reduce((sum, record) => sum + record.actualProductionVolumeMt, 0) : undefined
+  };
 }
 
 export function getSeasonRecord(parcel: FarmParcel, season: string) {
@@ -117,12 +136,20 @@ export function normalizeSeasonalRecord(
   const originalSeason = getRecordedCropValue(rec.season ?? rec.seasonName);
   const identity = getSeasonIdentity(originalSeason);
   const season = identity ? seasonLabel(identity.kind, identity.year) : originalSeason;
-  const seedVariety = getRecordedCropValue(rec.seedVariety ?? rec.varietyPlanted);
-  const volumeMt = Number(rec.actualProductionVolumeMt ?? ((rec.actualProductionBags ?? rec.yieldBags ?? 0) / 20));
+  const seedVariety = getRecordedCropValue(rec.seedVariety, rec.varietyPlanted);
+  const actualVolume = rec.actualProductionVolumeMt ?? (rec.actualProductionBags != null || rec.yieldBags != null
+    ? Number(rec.actualProductionBags ?? rec.yieldBags) / 20 : undefined);
+  const volumeMt = Number.isFinite(Number(actualVolume)) ? Number(actualVolume) : 0;
   const bags = Number(rec.actualProductionBags ?? rec.yieldBags ?? Math.round(volumeMt * 20));
   const yieldMt = Number(rec.yieldMtPerHa ?? rec.yieldMetricTons ?? 0);
   const harvestDate = rec.actualHarvestDate || rec.harvestDate || rec.estimatedHarvestDate || '';
-  const prodStatus = rec.productionStatus || (rec.status === 'Ongoing' ? 'Standing Crop' : rec.status === 'Damaged' ? 'Crop Failure / Damaged' : rec.status === 'Not recorded' ? 'Not recorded' : 'Harvest Completed');
+  const hasHarvest = rec.status === 'Harvested' || Boolean(rec.actualHarvestDate) || actualVolume != null;
+  const inferredStatus = rec.status === 'Ongoing' ? 'Standing Crop'
+    : rec.status === 'Damaged' ? 'Crop Failure / Damaged'
+    : rec.status === 'Not recorded' ? 'Not recorded'
+    : hasHarvest ? 'Harvest Completed'
+    : rec.plantingDate ? 'Standing Crop' : 'Not recorded';
+  const prodStatus = rec.productionStatus || inferredStatus;
   const status = (prodStatus === 'Standing Crop' ? 'Ongoing' : prodStatus === 'Crop Failure / Damaged' ? 'Damaged' : prodStatus === 'Not recorded' ? 'Not recorded' : 'Harvested');
 
   return {

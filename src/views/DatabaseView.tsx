@@ -1,4 +1,6 @@
 import { farmLabel, farmerKey, farmerReference } from '../data/officeRegistry';
+import { loadDistribution } from '../utils/officeDistribution';
+import type { DistributionEntry } from '../utils/officeDistribution';
 import { formatRegistryDate, formatRegistryName } from '../data/registryPreferences';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
@@ -11,7 +13,7 @@ import {
   getUserAssignedBarangays,
   isUserAuthorizedForBarangay,
 } from '../data/barangays';
-import { getParcelSeasonOptions, getRecordedCropValue, getSeasonRecord, hasActualProduction, matchesSeasonFilter, getShortSeasonName } from '../data/seasonalProduction';
+import { getParcelSeasonOptions, getParcelCropDetails, getRecordedCropValue, getSeasonRecord, hasActualProduction, matchesSeasonFilter, getShortSeasonName } from '../data/seasonalProduction';
 import { FarmParcel, SeasonalProductionRecord } from '../types';
 import { getLandPhoto, getFarmerPhoto } from '../data/photos';
 import { calculateCropGrowthStage } from '../data/riceVarieties';
@@ -150,6 +152,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   // Multi-Select Checkboxes State
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState<boolean>(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState('');
   const [isBulkDeleting, setIsBulkDeleting] = useState<boolean>(false);
   const headerCheckboxRef = useRef<HTMLInputElement | null>(null);
 
@@ -301,17 +304,37 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     return 'UNNAMED FARMER';
   };
 
-  // Extract unique rice varieties
+  const [seedReleases, setSeedReleases] = useState<DistributionEntry[]>([]);
+  useEffect(() => {
+    let active = true;
+    if (!currentUser || !isOnline) return;
+    void loadDistribution(true, 'Seed').then(entries => {
+      if (active) setSeedReleases(entries);
+    }).catch(error => console.warn('Seed releases unavailable in the farm registry:', error));
+    return () => { active = false; };
+  }, [currentUser, isOnline]);
+
+  const cropByParcel = useMemo(() => {
+    const releasedByParcel = new Map<string, Set<string>>();
+    for (const entry of seedReleases) {
+      if (!entry.parcel_id || !matchesSeasonFilter(entry.season, selectedSeason)) continue;
+      const varieties = releasedByParcel.get(entry.parcel_id) || new Set<string>();
+      varieties.add(entry.item);
+      releasedByParcel.set(entry.parcel_id, varieties);
+    }
+    return new Map(parcels.map(parcel => [parcel.tagNumber, {
+      ...getParcelCropDetails(parcel, selectedSeason),
+      releasedVarieties: [...(releasedByParcel.get(parcel.tagNumber) || [])]
+    }]));
+  }, [parcels, seedReleases, selectedSeason]);
+
   const uniqueVarieties = useMemo(() => {
-    const set = new Set<string>();
-    parcels.forEach((p) => {
-      if (p.breed) set.add(p.breed);
-      p.seasonalRecords?.forEach((r) => {
-        if (r.seedVariety) set.add(r.seedVariety);
-      });
-    });
-    return Array.from(set).sort();
-  }, [parcels]);
+    const varieties = new Set<string>();
+    for (const crop of cropByParcel.values()) {
+      for (const name of crop.variety ? [crop.variety] : crop.releasedVarieties) varieties.add(name);
+    }
+    return [...varieties].sort();
+  }, [cropByParcel]);
 
   // Filtered parcels with 10 assigned barangays logic, search scope, status filter, and user LFT jurisdiction
   const filteredParcels = useMemo(() => {
@@ -322,6 +345,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         if (p.isArchived || p.is_archived) return false;
       }
 
+      const crop = cropByParcel.get(p.tagNumber);
       const q = searchQuery.toLowerCase().trim();
       let matchesSearch = true;
       if (q) {
@@ -343,7 +367,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
             Boolean(p.farmerFamilyName && p.farmerFamilyName.toLowerCase().includes(q)) ||
             Boolean(p.farmerGivenName && p.farmerGivenName.toLowerCase().includes(q)) ||
             Boolean(p.farmerMiddleName && p.farmerMiddleName.toLowerCase().includes(q)) ||
-            (p.breed || '').toLowerCase().includes(q) ||
+            (crop?.variety || crop?.releasedVarieties.join(' ') || '').toLowerCase().includes(q) ||
             (p.barangay || '').toLowerCase().includes(q) ||
             (p.purok || '').toLowerCase().includes(q) ||
             (p.focalPerson || '').toLowerCase().includes(q);
@@ -363,6 +387,8 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
         matchesBrgy = matchBarangay(p.barangay, selectedBarangay);
       }
 
+      const ecosystem = crop?.ecosystem.toLowerCase() || '';
+      const tenure = crop?.tenure.toLowerCase() || '';
       let matchesStatus = true;
       if (statusFilter === 'verified') {
         matchesStatus = p.parcelVerificationStatus === 'Verified by MAO';
@@ -371,30 +397,21 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       } else if (statusFilter === 'flagged') {
         matchesStatus = p.parcelVerificationStatus === 'Flagged / Needs Revision';
       } else if (statusFilter === 'irrigated') {
-        matchesStatus = (p.purpose || '').toLowerCase().includes('irrigated');
+        matchesStatus = ecosystem.includes('irrigated');
       } else if (statusFilter === 'rainfed') {
-        matchesStatus = (p.purpose || '').toLowerCase().includes('rainfed');
+        matchesStatus = ecosystem.includes('rainfed');
       } else if (statusFilter === 'owner') {
-        matchesStatus = (p.sex || '').toLowerCase().includes('owner');
+        matchesStatus = tenure.includes('owner');
       } else if (statusFilter === 'tenant') {
-        matchesStatus = (p.sex || '').toLowerCase().includes('tenant');
+        matchesStatus = /tenant|lease/.test(tenure);
       }
 
-      const matchesEco =
-        selectedEcosystem === 'ALL' ||
-        (selectedEcosystem === 'IRRIGATED' && p.purpose.toLowerCase().includes('irrigated')) ||
-        (selectedEcosystem === 'HYBRID' && p.purpose.toLowerCase().includes('hybrid')) ||
-        (selectedEcosystem === 'RAINFED' && p.purpose.toLowerCase().includes('rainfed')) ||
-        (selectedEcosystem === 'UPLAND' && p.purpose.toLowerCase().includes('upland'));
-
-      const currentRecord = selectedSeason === 'ALL_SEASONS'
-        ? p.seasonalRecords?.[0]
-        : p.seasonalRecords?.find((r) => matchesSeasonFilter(r.season, selectedSeason) || matchesSeasonFilter(r.seasonName, selectedSeason));
-      const activeBreed = getRecordedCropValue(currentRecord?.seedVariety ?? (matchesSeasonFilter(p.croppingSeason || p.season, selectedSeason) ? p.breed : ''));
-
-      const matchesVariety =
-        selectedVariety === 'ALL' ||
-        activeBreed.toLowerCase() === selectedVariety.toLowerCase();
+      const matchesEco = selectedEcosystem === 'ALL' ||
+        (selectedEcosystem === 'HYBRID' ? crop?.seedType.toUpperCase() === 'HYBRID' : ecosystem.includes(selectedEcosystem.toLowerCase()));
+      const matchesVariety = selectedVariety === 'ALL' ||
+        (crop?.variety ? [crop.variety] : crop?.releasedVarieties || []).some(
+          variety => variety.toLowerCase() === selectedVariety.toLowerCase()
+        );
 
       return matchesSearch && matchesBrgy && matchesStatus && matchesEco && matchesVariety;
     });
@@ -424,7 +441,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     });
 
     return filtered;
-  }, [parcels, searchQuery, searchScope, statusFilter, selectedBarangay, selectedSeason, selectedEcosystem, selectedVariety, userAssigned, showArchived, sortBy, sortOrder]);
+  }, [parcels, searchQuery, searchScope, statusFilter, selectedBarangay, selectedSeason, selectedEcosystem, selectedVariety, userAssigned, showArchived, sortBy, sortOrder, cropByParcel]);
 
   const archivedCount = useMemo(() => {
     return parcels.filter((p) => Boolean(p.isArchived || p.is_archived)).length;
@@ -466,8 +483,13 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     for (const group of groups.values()) {
       group.farms.sort((a, b) => farmLabel(a).localeCompare(farmLabel(b), undefined, { numeric: true }));
     }
-    return [...groups.values()];
-  }, [filteredParcels, parcels, showArchived]);
+    const result = [...groups.values()];
+    if (sortBy === 'area') {
+      const area = (farms: FarmParcel[]) => farms.reduce((total, farm) => total + Number(farm.areaHa ?? farm.weightKg ?? 0), 0);
+      result.sort((a, b) => (area(a.farms) - area(b.farms)) * (sortOrder === 'asc' ? 1 : -1));
+    }
+    return result;
+  }, [filteredParcels, parcels, showArchived, sortBy, sortOrder]);
   const totalPages = Math.ceil(farmerGroups.length / itemsPerPage) || 1;
   const page = Math.min(currentPage, totalPages);
   const paginatedFarmers = farmerGroups.slice((page - 1) * itemsPerPage, page * itemsPerPage);
@@ -520,12 +542,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   }, [totalAreaMapped, filteredParcels.length]);
 
   const seasonOptions = useMemo(() => getParcelSeasonOptions(parcels), [parcels]);
-  const getSelectedProduction = (parcel: FarmParcel) => {
-    const records = (parcel.seasonalRecords || []).filter((record) =>
-      matchesSeasonFilter(record.season, selectedSeason) && hasActualProduction(record)
-    );
-    return records.length ? records.reduce((sum, record) => sum + record.actualProductionVolumeMt, 0) : undefined;
-  };
+  const getSelectedProduction = (parcel: FarmParcel) => cropByParcel.get(parcel.tagNumber)?.productionMt;
   const displayProduction = (parcel: FarmParcel) => {
     const volume = getSelectedProduction(parcel);
     return volume === undefined ? 'N/A' : `${volume.toFixed(2)} MT`;
@@ -842,6 +859,12 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     return parcels.filter((p) => selectedTags.includes(p.tagNumber));
   }, [parcels, selectedTags]);
 
+  useEffect(() => {
+    const known = new Set(parcels.map(parcel => parcel.tagNumber));
+    setSelectedTags(previous => previous.some(tag => !known.has(tag))
+      ? previous.filter(tag => known.has(tag)) : previous);
+  }, [parcels]);
+
   const visibleSelectedCount = useMemo(() => {
     return filteredParcels.filter((p) => selectedTags.includes(p.tagNumber)).length;
   }, [filteredParcels, selectedTags]);
@@ -877,12 +900,14 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
   };
 
   const handleBulkDeleteSubmit = async () => {
+    if (isBulkDeleting || !selectedTags.length) return;
     if (!permissions.canDeleteParcels) {
       setActionNotice('Restricted Permission: Only Central Admin can delete records.');
       setShowBulkDeleteModal(false);
       return;
     }
     setIsBulkDeleting(true);
+    setBulkDeleteError('');
     try {
       const count = selectedTags.length;
       await deleteBulkParcels(selectedTags);
@@ -892,7 +917,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       setTimeout(() => setActionNotice(null), 4000);
     } catch (err: any) {
       console.warn('Bulk delete error:', err);
-      setActionNotice(`Bulk delete notice: ${err?.message || 'Error deleting records'}`);
+      const message = err?.message || 'Unable to delete the selected farm parcels.';
+      setBulkDeleteError(message);
+      setActionNotice(message);
     } finally {
       setIsBulkDeleting(false);
     }
@@ -1192,11 +1219,13 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               <div>
                 <label className="block text-[10px] font-bold text-stone-500 uppercase mb-1">Rice Variety</label>
                 <select
+                  aria-label="Rice Variety"
                   value={selectedVariety}
                   onChange={(e) => setSelectedVariety(e.target.value)}
                   className="w-full px-3 py-1.5 rounded-xl border border-stone-300 bg-white cursor-pointer"
                 >
                   <option value="ALL">All Varieties</option>
+                  {selectedVariety !== 'ALL' && !uniqueVarieties.includes(selectedVariety) && <option>{selectedVariety}</option>}
                   {uniqueVarieties.map((v) => (
                     <option key={v} value={v}>{v}</option>
                   ))}
@@ -1206,6 +1235,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               <div>
                 <label className="block text-[10px] font-bold text-stone-500 uppercase mb-1">Agro-Ecosystem</label>
                 <select
+                  aria-label="Agro-Ecosystem"
                   value={selectedEcosystem}
                   onChange={(e) => setSelectedEcosystem(e.target.value)}
                   className="w-full px-3 py-1.5 rounded-xl border border-stone-300 bg-white cursor-pointer"
@@ -1221,6 +1251,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               <div>
                 <label className="block text-[10px] font-bold text-stone-500 uppercase mb-1">Cropping Season</label>
                 <select
+                  aria-label="Cropping Season"
                   value={selectedSeason}
                   onChange={(e) => setSelectedSeason(e.target.value)}
                   className="w-full px-3 py-1.5 rounded-xl border border-stone-300 bg-white cursor-pointer"
@@ -1241,7 +1272,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                     className="flex-1 px-3 py-1.5 rounded-xl border border-stone-300 bg-white cursor-pointer"
                   >
                     <option value="farmer">Sort: Farmer Name</option>
-                    <option value="area">Sort: Farm Area (ha)</option>
+                    <option value="area">Sort: Combined Area (ha)</option>
                     <option value="tag">Sort: Parcel Tag ID</option>
                     <option value="date">Sort: Registration Date</option>
                     <option value="barangay">Sort: Barangay</option>
@@ -1324,7 +1355,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
             {permissions.canDeleteParcels ? (
               <button
                 type="button"
-                onClick={() => setShowBulkDeleteModal(true)}
+                onClick={() => { setBulkDeleteError(''); setShowBulkDeleteModal(true); }}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
                 title="Delete selected records from database"
               >
@@ -1461,12 +1492,12 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                     !isNaN(parcel.lat) &&
                     !isNaN(parcel.lng)
                   );
-                  const seasonalRecord = getSeasonRecord(parcel, selectedSeason);
-                  const showParcelCrop = matchesSeasonFilter(parcel.croppingSeason || parcel.season, selectedSeason);
-                  const activeVariety = getRecordedCropValue(seasonalRecord?.seedVariety ?? (showParcelCrop ? parcel.breed : ''));
-                  const activeSeedType = getRecordedCropValue(seasonalRecord?.seedType ?? (showParcelCrop ? parcel.seedType : ''));
-                  const tenure = getRecordedCropValue(seasonalRecord?.tenure ?? (showParcelCrop ? parcel.sex : ''));
-                  const ecosystem = getRecordedCropValue(seasonalRecord?.ecosystem ?? (parcel.ecosystem || parcel.purpose));
+                  const crop = cropByParcel.get(parcel.tagNumber);
+                  const releasedVarieties = crop?.releasedVarieties.join(', ') || '';
+                  const activeVariety = crop?.variety || releasedVarieties;
+                  const activeSeedType = crop?.variety ? crop.seedType : releasedVarieties ? 'Distributed seed' : '';
+                  const tenure = crop?.tenure || '';
+                  const ecosystem = crop?.ecosystem || '';
                   const ecoBadge = getEcosystemBadge(ecosystem);
 
                   if (isEditing && inlineEditData) {
@@ -1953,7 +1984,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2 text-xs max-h-48 overflow-y-auto">
               <div className="font-bold text-slate-700 pb-1 border-b border-slate-200 flex justify-between">
-                <span>Selected Farmer Registrations</span>
+                <span>Selected Farm Parcels</span>
                 <span className="text-slate-500 font-mono font-normal">{selectedTags.length} total</span>
               </div>
               {selectedParcels.slice(0, 10).map((p) => (
@@ -1962,7 +1993,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                     <span className="font-bold text-slate-900">{p.raiserName}</span>
                     <span className="text-[10px] text-slate-500 block">Brgy. {p.barangay}</span>
                   </div>
-                  <span className="font-mono text-xs text-blue-900 font-bold">{p.swineNameOrId || p.tagNumber}</span>
+                  <span className="font-mono text-xs text-blue-900 font-bold">{farmLabel(p)} · {p.tagNumber}</span>
                 </div>
               ))}
               {selectedParcels.length > 10 && (
@@ -1977,6 +2008,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               <span>Warning: This action will permanently remove these records from the Supabase database and cannot be undone.</span>
             </div>
 
+            {bulkDeleteError && <p role="alert" className="rounded-md border border-rose-300 bg-rose-50 p-3 text-xs text-rose-900">
+              {bulkDeleteError}
+            </p>}
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
               <button
                 type="button"

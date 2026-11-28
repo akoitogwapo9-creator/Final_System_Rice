@@ -1,9 +1,9 @@
-import { farmerKey, farmLabel } from '../data/officeRegistry';
+import { farmerKey, farmLabel, farmerReference, rsbsaReference } from '../data/officeRegistry';
 import { readRegistryPreferences } from '../data/registryPreferences';
 import { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { supabase as sharedSupabaseClient, memoryAuthStorage } from '../supabase';
 import { FarmParcel, LftAccount, User } from '../types';
-import { getRecordedCropValue, hasActualProduction, isLegacyProductionEstimate, normalizeSeasonalRecord, seasonOrder } from '../data/seasonalProduction';
+import { getRecordedCropValue, hasActualProduction, isLegacyProductionEstimate, matchesSeasonFilter, normalizeSeasonalRecord, seasonOrder } from '../data/seasonalProduction';
 
 export { memoryAuthStorage };
 
@@ -169,8 +169,9 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     swineNameOrId: rsbsaNo || 'NO RSBSA',
     rsbsa_no: rsbsaNo || 'NO RSBSA',
     raiserName: displayName.toUpperCase() || 'UNKNOWN FARMER',
+    registeredFarmerName: row.farmer_name || row.registeredFarmerName,
     farmLabel: row.farm_label || row.farmLabel || 'Farm 1',
-    farmerGroupId: row.farmer_group_id || row.farmerGroupId,
+    farmerGroupId: row.farmer_group_id || row.farmerGroupId || row.farmer_id,
     offlineBatchId: row.offlineBatchId,
     parcelVerificationStatus: row.parcel_verification_status || row.parcelVerificationStatus,
     parcelVerifiedBy: row.parcel_verified_by || row.parcelVerifiedBy,
@@ -197,10 +198,10 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     weightKg: areaHa,
     areaHa,
     farm_area_ha: areaHa,
-    sex: getRecordedCropValue(row.sex ?? row.tenure ?? row.tenurial_status),
+    sex: getRecordedCropValue(row.tenure, row.sex, row.tenurial_status),
     ageMonths: Number(row.ageMonths ?? row.age_months ?? 0),
     scale: row.scale || (areaHa < 2 ? 'Smallholder (<2 ha)' : areaHa <= 5 ? 'Medium Farm (2-5 ha)' : 'Commercial (>5 ha)'),
-    purpose: getRecordedCropValue(row.ecosystem ?? row.purpose),
+    purpose: getRecordedCropValue(row.ecosystem, row.purpose),
     vaccinationStatus: row.vaccinationStatus || row.vaccination_status || 'RSBSA Enrolled & PCIC Insured',
     healthStatus: row.healthStatus || row.health_status || row.standingCropStage || 'Not recorded',
     biosecurityScore: row.biosecurityScore || row.biosecurity_score || 'Georeferenced (GPS Polygon Mapped)',
@@ -212,11 +213,11 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
       ? Number(row.targetYieldMt ?? row.target_yield_mt) : undefined,
     commodity,
     commodity_planted: commodity,
-    breed: getRecordedCropValue(row.seed_variety ?? row.breed ?? row.variety),
-    variety: getRecordedCropValue(row.seed_variety ?? row.variety ?? row.breed),
+    breed: getRecordedCropValue(row.variety, row.seed_variety, row.breed),
+    variety: getRecordedCropValue(row.variety, row.seed_variety, row.breed),
     seedType: getRecordedCropValue(row.seedType ?? row.seed_type),
-    ecosystem: getRecordedCropValue(row.ecosystem ?? row.purpose),
-    tenure: getRecordedCropValue(row.tenure ?? row.sex ?? row.tenurial_status),
+    ecosystem: getRecordedCropValue(row.ecosystem, row.purpose),
+    tenure: getRecordedCropValue(row.tenure, row.sex, row.tenurial_status),
     focalPerson: row.focalPerson || row.focal_person || row.technician || '',
     standingCropStage: row.standingCropStage || row.standing_crop_stage || '',
     plantingDate: row.plantingDate || row.planting_date || '',
@@ -233,29 +234,36 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     polygonCoords: row.polygonCoords || row.polygon_coords || undefined,
     boundaryCoords: row.boundaryCoords || row.boundary_coords || undefined,
     seasonalRecords: (Array.isArray(row.seasonalRecords || row.seasonal_records) && (row.seasonalRecords || row.seasonal_records).length > 0)
-      ? (row.seasonalRecords || row.seasonal_records).map((sr: any) => normalizeSeasonalRecord(sr, tagNumber))
+      ? (row.seasonalRecords || row.seasonal_records).filter((record: unknown) => record && typeof record === 'object').map((record: any) => normalizeSeasonalRecord({
+        ...record,
+        season: record.season || record.seasonName || record.cropping_season,
+        seedVariety: getRecordedCropValue(record.seedVariety, record.varietyPlanted, record.seed_variety, record.variety),
+        seedType: record.seedType || record.seed_type,
+        tenure: getRecordedCropValue(record.tenure, record.tenurial_status),
+        plantingDate: record.plantingDate || record.planting_date,
+        actualHarvestDate: record.actualHarvestDate || record.actual_harvest_date,
+        actualProductionVolumeMt: record.actualProductionVolumeMt ?? record.actual_production_volume_mt ?? record.production_mt,
+        actualProductionBags: record.actualProductionBags ?? record.actual_production_bags,
+        productionStatus: record.productionStatus || record.production_status
+      }, tagNumber))
       : []
   };
 
   parcel.seasonalRecords = parcel.seasonalRecords?.filter((record) => !isLegacyProductionEstimate(parcel, record));
-  const latest = [...(parcel.seasonalRecords || [])].sort((a, b) => seasonOrder(b.season) - seasonOrder(a.season))[0];
+  parcel.seasonalRecords?.sort((a, b) => seasonOrder(b.season) - seasonOrder(a.season) ||
+    (b.plantingDate || b.recordedAt).localeCompare(a.plantingDate || a.recordedAt));
+  const latest = parcel.seasonalRecords?.[0];
   if (latest && seasonOrder(latest.season) >= seasonOrder(season)) {
-    parcel.breed = parcel.variety = latest.seedVariety;
-    parcel.seedType = latest.seedType;
+    const sameSeason = !season || matchesSeasonFilter(latest.season, season);
+    parcel.breed = parcel.variety = getRecordedCropValue(latest.seedVariety, sameSeason ? parcel.variety : '');
+    parcel.seedType = getRecordedCropValue(latest.seedType, sameSeason ? parcel.seedType : '');
     parcel.croppingSeason = parcel.season = latest.season;
     parcel.plantingDate = latest.plantingDate;
     parcel.harvestDate = latest.harvestDate || '';
-    if (latest.tenure !== undefined) parcel.tenure = parcel.sex = latest.tenure;
+    parcel.tenure = parcel.sex = getRecordedCropValue(latest.tenure, parcel.tenure);
     if (!parcel.ecosystem && latest.ecosystem) parcel.ecosystem = parcel.purpose = latest.ecosystem;
     if (latest.irrigationAssociation !== undefined) parcel.irrigationAssociation = latest.irrigationAssociation;
     if (latest.targetYieldMt !== undefined) parcel.targetYieldMt = latest.targetYieldMt ?? undefined;
-  } else if (!latest && !parcel.plantingDate && !parcel.harvestDate &&
-      (/^not yet assigned$/i.test(String(row.seed_variety ?? row.breed ?? row.variety ?? '')) ||
-       parcel.healthStatus === 'Registered (Pending Crop Form)')) {
-    // Earlier registration forms saved crop defaults for these unplanted parcels.
-    parcel.breed = parcel.variety = parcel.seedType = parcel.croppingSeason = parcel.season = '';
-    parcel.sex = parcel.tenure = parcel.irrigationAssociation = '';
-    parcel.targetYieldMt = undefined;
   }
   return parcel;
 }
@@ -701,7 +709,7 @@ export async function checkDuplicateRsbsa(
   rsbsa: string,
   excludeTagNumber?: string
 ): Promise<{ isDuplicate: boolean; farmerName?: string; existingTag?: string; isOfflineMatch?: boolean }> {
-  const clean = (rsbsa || '').trim();
+  const clean = rsbsaReference(rsbsa);
   if (!clean || clean.toUpperCase() === 'NO RSBSA') {
     return { isDuplicate: false };
   }
@@ -710,8 +718,7 @@ export async function checkDuplicateRsbsa(
   const pending = getOfflinePendingFarms();
   const pendingMatch = pending.find((p) => {
     if (excludeTagNumber && p.tagNumber === excludeTagNumber) return false;
-    const pRsbsa = (p.swineNameOrId || p.rsbsa_no || '').trim().toLowerCase();
-    return pRsbsa === clean.toLowerCase();
+    return farmerReference(p) === clean;
   });
 
   if (pendingMatch) {
@@ -729,7 +736,7 @@ export async function checkDuplicateRsbsa(
       const qPromise = supabaseClient
         .from('farmers')
         .select('id, rsbsa_number, farmer_name')
-        .ilike('rsbsa_number', clean)
+        .eq('farmer_group_id', clean)
         .limit(5);
 
       const { data, error } = await withTimeout(qPromise, 4000, 'Duplicate RSBSA check timeout');
@@ -913,6 +920,11 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
       ? norm.field_photo_url
       : null;
 
+  const registeredName = norm.registeredFarmerName;
+  const formattedName = formatFarmerNameForStorage(norm);
+  const storedName = registeredName && formatFarmerNameForStorage(mapFarmerRowToParcel({ farmer_name: registeredName })) === formattedName
+    ? registeredName : formattedName;
+
   const exactBarangay = (parcel.barangay || norm.barangay || '').trim();
   const exactAddress = (parcel.residential_address || parcel.address || norm.residential_address || norm.address || (exactBarangay ? `${exactBarangay}, Silago, Southern Leyte` : 'Silago, Southern Leyte')).trim();
 
@@ -925,7 +937,7 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
     is_archived: Boolean(norm.isArchived),
     irrigation_association: norm.irrigationAssociation || null,
     rsbsa_number: norm.swineNameOrId || norm.rsbsa_no || '',
-    farmer_name: formatFarmerNameForStorage(norm),
+    farmer_name: storedName,
     barangay: exactBarangay,
     contact_number,
     lat: Number(norm.lat || 10.5335),
@@ -1197,15 +1209,16 @@ export const supabaseDb = {
     await this.deleteBulkFarmRecords([tagNumber]);
   },
 
-  async deleteBulkFarmRecords(tagNumbers: string[]): Promise<boolean> {
+  async deleteBulkFarmRecords(tagNumbers: string[]): Promise<string[]> {
     if (!(await hasSupabaseWriteSession())) throw new Error('Sign in before deleting registry records.');
-    if (!tagNumbers.length) return true;
+    if (!tagNumbers.length) return [];
     if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('Connect to the internet to delete farm parcels.');
-    const { error } = await supabaseClient.from('farmers').delete().in('id', tagNumbers);
+    const key = registryQueueKey();
+    const { data, error } = await supabaseClient.from('farmers').delete().in('id', tagNumbers).select('id');
     if (error?.code === '23503') throw new Error('A selected farm has a distribution history. Archive the parcel to preserve its receipts.');
     if (error) throw error;
-    for (const tagNumber of tagNumbers) removeOfflinePendingFarm(tagNumber);
-    return true;
+    for (const tagNumber of tagNumbers) removeOfflinePendingFarm(tagNumber, key);
+    return (data || []).map(row => String(row.id));
   },
 
   /**

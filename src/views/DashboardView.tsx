@@ -1,3 +1,4 @@
+import { farmerKey } from '../data/officeRegistry';
 import { formatRegistryName } from '../data/registryPreferences';
 import { SeasonProductionPanel } from '../components/SeasonProductionPanel';
 import React, { useMemo, useState } from 'react';
@@ -189,7 +190,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenCropPlanting,
   onSelectBarangay
 }) => {
-  const { parcels, lftAccounts, permissions, barangayProfiles, registryPreferences } = useApp();
+  const { parcels: registryParcels, lftAccounts, permissions, barangayProfiles, registryPreferences } = useApp();
+  const parcels = useMemo(() => registryParcels.filter(parcel => !parcel.isArchived && !parcel.is_archived), [registryParcels]);
   const [selectedBarangay, setSelectedBarangay] = useState('ALL');
   const [metric, setMetric] = useState<DashboardMetric>('ecosystem');
   const [chartStyle, setChartStyle] = useState<ChartStyle>('bar');
@@ -207,9 +209,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const totalArea = visibleParcels.reduce((sum, parcel) => sum + areaOf(parcel), 0);
   const totalYield = visibleParcels.reduce((sum, parcel) => sum + Number(parcel.targetYieldMt || 0), 0);
   const mappedCount = visibleParcels.filter(validGps).length;
-  const farmerCount = new Set(
-    visibleParcels.map((parcel) => parcel.raiserName.trim().toLowerCase()).filter(Boolean)
-  ).size;
+  const farmerCount = new Set(visibleParcels.map(farmerKey)).size;
   const today = new Date();
   const todayCount = visibleParcels.filter((parcel) => {
     const date = parseDate(parcel.registrationDate);

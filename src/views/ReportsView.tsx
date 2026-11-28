@@ -1,3 +1,4 @@
+import { farmerKey } from '../data/officeRegistry';
 import { OfficeSummaryReport } from '../components/OfficeSummaryReport';
 import { formatRegistryDate, readRegistryPreferences } from '../data/registryPreferences';
 import React, { useState, useMemo, useEffect } from 'react';
@@ -152,7 +153,8 @@ const getReportParcelAreaHa = (parcel: FarmParcel) => {
 };
 
 export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => {
-  const { parcels, currentUser, activeSeason, registryPreferences, municipalBranding, t } = useApp();
+  const { parcels: registryParcels, currentUser, activeSeason, registryPreferences, municipalBranding, t } = useApp();
+  const parcels = useMemo(() => registryParcels.filter(parcel => !parcel.isArchived && !parcel.is_archived), [registryParcels]);
 
   const [reportType, setReportType] = useState<
     'official_registry' | 'seasonal_production' | 'barangay_consolidated' | 'census' | 'rsbsa'
@@ -404,7 +406,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
   }, [reportParcels]);
 
   const uniqueFarmerCount = useMemo(
-    () => new Set(reportParcels.map((parcel) => String(parcel.raiserName || '').trim().toLocaleLowerCase()).filter(Boolean)).size,
+    () => new Set(reportParcels.map(farmerKey)).size,
     [reportParcels]
   );
 
@@ -457,7 +459,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
 
       return {
         barangay: brgy,
-        farmerCount: new Set(brgyParcels.map((parcel) => String(parcel.raiserName || '').trim().toLocaleLowerCase()).filter(Boolean)).size,
+        farmerCount: new Set(brgyParcels.map(farmerKey)).size,
         areaHa: Number(brgyArea.toFixed(2)),
         productionMt: Number(brgyProd.toFixed(2)),
         productionRecordCount: matchingProductionRecords.length,

@@ -59,6 +59,16 @@ import {
 } from 'lucide-react';
 
 const PUBLIC_PORTAL_TABS: PortalTab[] = ['evaluation', 'legal_decrees', 'map'];
+const PORTAL_PATHS: Partial<Record<string, PortalTab>> = {
+  '/barangays': 'barangays', '/account': 'account',
+  '/admin/registry-form-customization': 'registry_form', '/admin/user-accounts': 'accounts',
+  '/admin/activity': 'audit', '/gis-measure': 'gis_measure', '/subsidies': 'subsidies',
+  '/map': 'map', '/dashboard': 'dashboard', '/lft_dashboard': 'lft_dashboard',
+  '/brgy_dashboard': 'brgy_dashboard', '/eartags': 'eartags', '/reports': 'reports'
+};
+const ADMIN_ONLY_TABS: PortalTab[] = ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure', 'audit'];
+const PORTAL_TABS = new Set<string>([...Object.values(PORTAL_PATHS), 'photos', 'settings', 'evaluation', 'legal_decrees']);
+
 
 const AppContent: React.FC = () => {
   const {
@@ -162,72 +172,40 @@ const AppContent: React.FC = () => {
   });
   const hasTriggeredInitialToastRef = useRef(false);
 
-  // Clean up any external OAuth error URL parameters on initial load and handle ?tab= deep links
+  const initialUrl = useRef(typeof window === 'undefined' ? null : new URL(window.location.href));
+  const initialRouteHandled = useRef(false);
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const url = new URL(window.location.href);
-        const tabParam = url.searchParams.get('tab');
-        const routeTabs: Record<string, PortalTab> = {
-          '/barangays': 'barangays', '/account': 'account',
-          '/admin/registry-form-customization': 'registry_form', '/admin/user-accounts': 'accounts', '/admin/activity': 'audit',
-          '/gis-measure': 'gis_measure', '/subsidies': 'subsidies',
-          '/map': 'map', '/dashboard': 'dashboard', '/lft_dashboard': 'lft_dashboard',
-          '/brgy_dashboard': 'brgy_dashboard'
-        };
-        const routeTab = routeTabs[url.pathname.replace(/\/$/, '')];
-        const sanitizeDeepLink = (target: PortalTab): PortalTab => {
-          if (currentUser && currentUser.role !== 'Central Admin' && ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure', 'audit'].includes(target)) {
-            return 'lft_dashboard';
-          }
-          return target;
-        };
-
-        if (routeTab) {
-          if (!currentUser && !PUBLIC_PORTAL_TABS.includes(routeTab)) {
-            setIsLoginModalOpen(true);
-            setViewMode('landing');
-            window.history.replaceState({}, document.title, '/');
-          } else {
-            setActiveTab(sanitizeDeepLink(routeTab));
-            setViewMode('portal');
-          }
-        } else if (url.pathname.replace(/\/$/, '') === '/certificate') {
-          if (currentUser) {
-            setActiveTab('eartags');
-            setViewMode('portal');
-            setOpenCertificateOnLoad(true);
-          } else {
-            setIsLoginModalOpen(true);
-          }
-        } else if (tabParam === 'evaluation') {
-          setActiveTab('evaluation');
-          setViewMode('portal');
-        } else if (tabParam && ['dashboard', 'lft_dashboard', 'brgy_dashboard', 'map', 'gis_measure', 'eartags', 'subsidies', 'reports', 'accounts', 'photos', 'settings', 'legal_decrees', 'barangays', 'account', 'registry_form', 'audit'].includes(tabParam)) {
-          if (!currentUser && !PUBLIC_PORTAL_TABS.includes(tabParam as PortalTab)) {
-            setIsLoginModalOpen(true);
-            setViewMode('landing');
-            url.searchParams.delete('tab');
-            window.history.replaceState({}, document.title, url.toString());
-          } else {
-            setActiveTab(sanitizeDeepLink(tabParam as PortalTab));
-            setViewMode('portal');
-          }
-        }
-
-        if (
-          url.searchParams.has('error') ||
-          url.searchParams.has('error_description') ||
-          url.hash.includes('error=') ||
-          url.hash.includes('error_description=')
-        ) {
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
-      } catch (e) {
-        console.warn('URL cleanup notice:', e);
-      }
+    const url = initialUrl.current;
+    if (!url || isAuthLoading || initialRouteHandled.current) return;
+    const pathname = url.pathname.replace(/\/$/, '');
+    const requestedTab = url.searchParams.get('tab');
+    const certificate = pathname === '/certificate' && (!requestedTab || requestedTab === 'eartags');
+    const target = certificate ? 'eartags' : requestedTab && PORTAL_TABS.has(requestedTab)
+      ? requestedTab as PortalTab : PORTAL_PATHS[pathname];
+    if (target && !currentUser && (certificate || !PUBLIC_PORTAL_TABS.includes(target))) {
+      setIsLoginModalOpen(true);
+      return;
     }
-  }, []);
+
+    initialRouteHandled.current = true;
+    if (target) {
+      const tab = target === 'brgy_dashboard' ? 'barangays' :
+        currentUser && !isCentralAdmin && ADMIN_ONLY_TABS.includes(target) ? 'lft_dashboard' : target;
+      setActiveTab(tab);
+      setViewMode('portal');
+      if (certificate) setOpenCertificateOnLoad(true);
+    }
+
+    const cleanUrl = new URL(window.location.href);
+    const hadError = cleanUrl.searchParams.has('error') || cleanUrl.searchParams.has('error_description') ||
+      /(?:^#|&)error(?:_description)?=/.test(cleanUrl.hash);
+    if (hadError) {
+      cleanUrl.searchParams.delete('error');
+      cleanUrl.searchParams.delete('error_description');
+      if (/(?:^#|&)error(?:_description)?=/.test(cleanUrl.hash)) cleanUrl.hash = '';
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  }, [currentUser, isAuthLoading, isCentralAdmin, setActiveTab]);
 
   // Trigger upon initial authenticated mount or Central Admin init
   useEffect(() => {
@@ -245,18 +223,16 @@ const AppContent: React.FC = () => {
 
   // Enforce strict role-based & authentication route boundaries across all tabs
   useEffect(() => {
+    if (isAuthLoading) return;
     if (!currentUser) {
-      if (!PUBLIC_PORTAL_TABS.includes(activeTab)) {
+      if (!PUBLIC_PORTAL_TABS.includes(activeTab) && activeTab !== 'eartags') {
         setActiveTab('eartags');
       }
       return;
     }
-    if (!isCentralAdmin) {
-      if (activeTab === 'dashboard' || activeTab === 'accounts' || activeTab === 'photos' || activeTab === 'registry_form' || activeTab === 'gis_measure' || activeTab === 'audit') {
-        setActiveTab('lft_dashboard');
-      }
-    }
-  }, [currentUser, isCentralAdmin, activeTab, setActiveTab]);
+    if (activeTab === 'brgy_dashboard') setActiveTab('barangays');
+    else if (!isCentralAdmin && ADMIN_ONLY_TABS.includes(activeTab)) setActiveTab('lft_dashboard');
+  }, [currentUser, isAuthLoading, isCentralAdmin, activeTab, setActiveTab]);
 
   const handleOpenLogin = () => setIsLoginModalOpen(true);
 
@@ -286,6 +262,7 @@ const AppContent: React.FC = () => {
     try {
       if (typeof window !== 'undefined') {
         const url = new URL(window.location.href);
+        url.pathname = '/';
         url.searchParams.delete('tab');
         window.history.replaceState({}, '', url.toString());
       }
@@ -302,12 +279,11 @@ const AppContent: React.FC = () => {
     tab: PortalTab,
     subTab?: 'profile' | 'municipal' | 'featured_card' | 'display' | 'media' | 'landing'
   ) => {
-    const adminOnlyTabs: PortalTab[] = ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure', 'audit'];
     if (!currentUser && !PUBLIC_PORTAL_TABS.includes(tab)) {
       setIsLoginModalOpen(true);
       return;
     }
-    if (currentUser && !isCentralAdmin && adminOnlyTabs.includes(tab)) {
+    if (currentUser && !isCentralAdmin && ADMIN_ONLY_TABS.includes(tab)) {
       setActiveTab('lft_dashboard');
       setViewMode('portal');
       return;

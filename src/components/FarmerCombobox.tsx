@@ -3,10 +3,12 @@ import { farmerKey, farmerReference, groupFarmerParcels } from '../data/officeRe
 import type { FarmParcel } from '../types';
 import { OFFICE_INPUT_CLASS, OFFICE_LABEL_CLASS } from './OfficeFormPrimitives';
 
-export function FarmerCombobox({ parcels, value, onChange }: {
+export function FarmerCombobox({ parcels, value, onChange, label = 'Registered Farmer', clearLabel }: {
   parcels: FarmParcel[];
   value: string;
   onChange: (key: string) => void;
+  label?: string;
+  clearLabel?: string;
 }) {
   const id = useId();
   const [query, setQuery] = useState('');
@@ -15,7 +17,12 @@ export function FarmerCombobox({ parcels, value, onChange }: {
   const farmers = useMemo(() => groupFarmerParcels(parcels), [parcels]);
   const selected = farmers.find(parcel => farmerKey(parcel) === value);
   const getLabel = (parcel: FarmParcel) => `${parcel.raiserName} · ${farmerReference(parcel) || parcel.tagNumber}`;
-  const matches = farmers.filter(parcel => getLabel(parcel).toLowerCase().includes(query.trim().toLowerCase())).slice(0, 50);
+  const terms = query.toLowerCase().trim().split(/[\s,]+/).filter(Boolean);
+  const matches = farmers.filter(parcel => {
+    const name = getLabel(parcel).toLowerCase();
+    const reference = farmerReference(parcel).replace(/-/g, '');
+    return terms.every(term => name.includes(term) || (/^[\d-]+$/.test(term) && reference.includes(term.replace(/-/g, ''))));
+  }).slice(0, 50);
   const select = (parcel: FarmParcel) => {
     onChange(farmerKey(parcel));
     setOpen(false);
@@ -23,7 +30,7 @@ export function FarmerCombobox({ parcels, value, onChange }: {
   };
 
   return <div className="relative space-y-1">
-    <label htmlFor={id} className={OFFICE_LABEL_CLASS}>Registered Farmer</label>
+    <label htmlFor={id} className={OFFICE_LABEL_CLASS}>{label}</label>
     <input id={id} role="combobox" aria-autocomplete="list" aria-expanded={open}
       aria-controls={open ? `${id}-options` : undefined}
       aria-activedescendant={open && matches[active] ? `${id}-option-${active}` : undefined}
@@ -45,6 +52,8 @@ export function FarmerCombobox({ parcels, value, onChange }: {
           if (matches[active]) select(matches[active]);
         }
       }} />
+    {value && clearLabel && <button type="button" className="text-xs font-semibold text-emerald-800 underline"
+      onClick={() => { onChange(''); setOpen(false); setQuery(''); }}>{clearLabel}</button>}
     {open && <ul role="listbox" id={`${id}-options`} aria-label="Registered farmers"
       className="absolute z-30 max-h-48 w-full overflow-y-auto rounded border border-slate-300 bg-white shadow-lg">
       {matches.length === 0 && <li className="p-2 text-xs text-slate-600">No matching farmers.</li>}
