@@ -919,7 +919,7 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
   return {
     id: formattedId,
     farm_label: farmLabel(norm),
-    farmer_group_id: farmerKey(norm),
+    farmer_group_id: norm.farmerGroupId || farmerKey(norm),
     boundary_coords: norm.boundaryCoords?.length ? norm.boundaryCoords : null,
     custom_fields: norm.customFields || {},
     is_archived: Boolean(norm.isArchived),
@@ -950,6 +950,7 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
       season: r.season,
       seasonName: r.seasonName || r.season,
       seedVariety: r.seedVariety,
+      seedQuantityKg: r.seedQuantityKg,
       varietyPlanted: r.varietyPlanted || r.seedVariety,
       seedType: r.seedType,
       ecosystem: r.ecosystem,

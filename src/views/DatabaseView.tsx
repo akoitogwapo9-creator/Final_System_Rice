@@ -1,4 +1,4 @@
-import { farmLabel } from '../data/officeRegistry';
+import { farmLabel, farmerKey, farmerReference } from '../data/officeRegistry';
 import { formatRegistryDate, formatRegistryName } from '../data/registryPreferences';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
@@ -66,8 +66,8 @@ import {
 interface DatabaseViewProps {
   onSelectParcel: (parcel: FarmParcel) => void;
   onEditParcel: (parcel: FarmParcel) => void;
-  onOpenAddParcel: () => void;
-  onOpenCropPlanting?: (parcel?: FarmParcel | null) => void;
+  onOpenAddParcel: (farmer?: FarmParcel) => void;
+  onOpenCropPlanting?: (parcel?: FarmParcel | null, farmerOnly?: boolean) => void;
   onOpenPublicInterface?: () => void;
   onNavigateToReports?: (barangay?: string) => void;
   onLocateOnMap?: (parcel: FarmParcel) => void;
@@ -449,12 +449,37 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
     return count;
   }, [activeAdvancedFilterCount, searchQuery, searchScope, selectedBarangay, statusFilter, showArchived]);
 
-  const totalPages = Math.ceil(filteredParcels.length / itemsPerPage) || 1;
-
-  const paginatedParcels = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    return filteredParcels.slice(start, start + itemsPerPage);
-  }, [filteredParcels, currentPage, itemsPerPage]);
+  const [expandedFarmers, setExpandedFarmers] = useState<Set<string>>(new Set());
+  const farmerGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; farms: FarmParcel[]; matching: FarmParcel[] }>();
+    for (const parcel of filteredParcels) {
+      const key = farmerKey(parcel);
+      const existing = groups.get(key);
+      if (existing) existing.matching.push(parcel);
+      else groups.set(key, { key, farms: [], matching: [parcel] });
+    }
+    for (const parcel of parcels) {
+      if (Boolean(parcel.isArchived || parcel.is_archived) === showArchived) {
+        groups.get(farmerKey(parcel))?.farms.push(parcel);
+      }
+    }
+    for (const group of groups.values()) {
+      group.farms.sort((a, b) => farmLabel(a).localeCompare(farmLabel(b), undefined, { numeric: true }));
+    }
+    return [...groups.values()];
+  }, [filteredParcels, parcels, showArchived]);
+  const totalPages = Math.ceil(farmerGroups.length / itemsPerPage) || 1;
+  const page = Math.min(currentPage, totalPages);
+  const paginatedFarmers = farmerGroups.slice((page - 1) * itemsPerPage, page * itemsPerPage);
+  const tableSummary = paginatedFarmers.length
+    ? `${(page - 1) * itemsPerPage + 1}-${Math.min(page * itemsPerPage, farmerGroups.length)}`
+    : '0';
+  const toggleFarmer = (key: string) => setExpandedFarmers(previous => {
+    const next = new Set(previous);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
 
   const certificateCandidates = useMemo(
     () => filteredParcels.filter((parcel) => {
@@ -1004,7 +1029,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                onClick={onOpenAddParcel}
+                onClick={() => onOpenAddParcel()}
                 className="px-4 py-1.5 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
@@ -1242,7 +1267,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               {totalActiveFilterCount} active filter{totalActiveFilterCount !== 1 ? 's' : ''}
             </span>
             <span>
-              Showing {paginatedParcels.length > 0 ? `${(currentPage - 1) * itemsPerPage + 1}-${Math.min(currentPage * itemsPerPage, filteredParcels.length)}` : '0-0'} of {filteredParcels.length} matching rice farms
+              Showing {tableSummary} of {farmerGroups.length} farmers
             </span>
             {totalActiveFilterCount > 0 && (
               <button
@@ -1325,11 +1350,10 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
       <div className="overflow-x-auto rounded border border-gov-line bg-white">
         {/* Scrollable Container with Sticky Header, Sticky Left Columns, and Visible Scrollbar */}
         <div className="custom-table-scrollbar w-full overflow-x-auto overflow-y-auto max-h-[calc(100vh-240px)] min-h-[400px] divide-y divide-gov-line/60 relative">
-          <table className="w-full min-w-[1380px] text-left border-collapse text-xs">
-            <thead className="sticky top-0 z-20 bg-gov-canvas text-gov-muted border-b border-gov-line shadow-2xs">
-              <tr className="border-b border-gov-line text-[10px] font-bold uppercase tracking-wider text-gov-muted">
-                {/* 1. [Checkbox Selection] */}
-                <th className="w-10 min-w-[40px] max-w-[40px] py-2.5 px-2 text-center whitespace-nowrap text-gov-muted border-r border-gov-line">
+          <table className="w-full min-w-[740px] table-fixed text-left text-xs">
+            <thead className="sticky top-0 z-20 bg-gov-canvas text-gov-muted shadow-sm">
+              <tr>
+                <th className="w-10 p-3 text-center">
                   <input
                     type="checkbox"
                     ref={headerCheckboxRef}
@@ -1339,67 +1363,17 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                     title={isAllSelected ? "Deselect All" : "Select All Visible Records"}
                   />
                 </th>
-
-                {/* 2. PARCEL ID TAG */}
-                <th className="w-40 min-w-[150px] py-2.5 px-3 text-left whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  PARCEL ID TAG
-                </th>
-
-                {/* 3. FARMER NAME */}
-                <th className="w-56 min-w-[210px] py-2.5 px-3 text-left whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  FARMER NAME
-                </th>
-
-                {/* 4. BARANGAY */}
-                <th className="w-36 min-w-[130px] py-2.5 px-3 text-left whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  BARANGAY
-                </th>
-
-                {/* 5. RICE VARIETY */}
-                <th className="w-44 min-w-[160px] py-2.5 px-3 text-left whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  RICE VARIETY
-                </th>
-
-                {/* 6. TENURE */}
-                <th className="w-28 min-w-[100px] py-2.5 px-2 text-center whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  TENURE
-                </th>
-
-                {/* 7. FARM AREA (HA) */}
-                <th className="w-24 min-w-[90px] py-2.5 px-2.5 text-right whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  AREA (HA)
-                </th>
-
-                {/* 8. EST. YIELD (MT) */}
-                <th className="w-24 min-w-[90px] py-2.5 px-2.5 text-right whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  PRODUCTION (MT)
-                </th>
-
-                {/* 9. AGRO-ECOSYSTEM */}
-                <th className="w-36 min-w-[130px] py-2.5 px-3 text-left whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  ECOSYSTEM
-                </th>
-
-                {/* 10. DATE REGISTERED */}
-                <th className="w-28 min-w-[100px] py-2.5 px-2 text-center whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  DATE
-                </th>
-
-                {/* 11. STATUS */}
-                <th className="w-24 min-w-[90px] py-2.5 px-2 text-center whitespace-nowrap text-gov-muted border-r border-gov-line">
-                  STATUS
-                </th>
-
-                {/* 12. ACTIONS */}
-                <th className="w-32 min-w-[120px] py-2.5 px-2.5 text-center whitespace-nowrap text-gov-muted border-l border-gov-line">
-                  ACTIONS
-                </th>
+                <th className="w-36 p-3">RSBSA Number</th>
+                <th className="p-3">Farmer Name</th>
+                <th className="w-24 p-3">Farm Count</th>
+                <th className="w-28 p-3">Total Area (ha)</th>
+                <th className="w-64 p-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-200/80 text-stone-700 bg-white">
               {filteredParcels.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="py-14 text-center text-stone-400 font-medium">
+                  <td colSpan={6} className="py-14 text-center text-stone-400 font-medium">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Search className="w-8 h-8 text-stone-300 stroke-1" />
                       <p className="text-sm font-semibold text-stone-700">
@@ -1411,7 +1385,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                       {permissions.canAddParcels && (
                         <button
                           type="button"
-                          onClick={onOpenAddParcel}
+                          onClick={() => onOpenAddParcel()}
                           className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition cursor-pointer"
                         >
                           <Plus className="w-4 h-4" />
@@ -1422,7 +1396,57 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                   </td>
                 </tr>
               ) : (
-                paginatedParcels.map((parcel, idx) => {
+                paginatedFarmers.map(({ key, farms, matching }) => {
+                  const farmer = farms[0];
+                  const authorizedFarm = farms.find(parcel => isUserAuthorizedForBarangay(currentUser, parcel.barangay));
+                  const expanded = expandedFarmers.has(key);
+                  const area = farms.reduce((sum, parcel) => sum + Number(parcel.areaHa ?? parcel.weightKg ?? 0), 0);
+                  return <React.Fragment key={key}>
+                    <tr className="cursor-pointer hover:bg-gov-canvas" onClick={() => toggleFarmer(key)}>
+                      <td className="p-3 text-center" onClick={event => event.stopPropagation()}>
+                        <input type="checkbox" className="accent-gov-green" aria-label={`Select matching parcels for ${farmer.raiserName}`}
+                          checked={matching.every(parcel => selectedTags.includes(parcel.tagNumber))}
+                          onChange={event => {
+                            const tags = matching.map(parcel => parcel.tagNumber);
+                            const checked = event.target.checked;
+                            setSelectedTags(previous => checked
+                              ? [...new Set([...previous, ...tags])]
+                              : previous.filter(tag => !tags.includes(tag)));
+                          }} />
+                      </td>
+                      <td className="p-3 font-mono">{farmerReference(farmer) || 'NO RSBSA'}</td>
+                      <th scope="row" className="p-3">{getFarmerDisplayName(farmer)}</th>
+                      <td className="p-3"><span className="rounded-full bg-emerald-100 px-2 py-1 font-semibold text-emerald-900">
+                        {farms.length} {farms.length === 1 ? 'Farm' : 'Farms'}
+                      </span></td>
+                      <td className="p-3 font-mono font-semibold">{area.toFixed(registryPreferences.areaPrecision)} ha</td>
+                      <td className="p-3 whitespace-nowrap" onClick={event => event.stopPropagation()}>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" aria-expanded={expanded} className="rounded border px-2 py-1" onClick={() => toggleFarmer(key)}>
+                            {expanded ? 'Hide Farms' : 'View Farms'}
+                          </button>
+                          {!showArchived && authorizedFarm && permissions.canAddParcels && <button type="button"
+                            className="rounded bg-emerald-800 px-2 py-1 text-white" onClick={() => onOpenAddParcel(authorizedFarm)}>+ Add Farm</button>}
+                          {!showArchived && authorizedFarm && currentUser && onOpenCropPlanting && <button type="button"
+                            className="rounded border px-2 py-1" onClick={() => onOpenCropPlanting(authorizedFarm, true)}>Record Crop / Seed</button>}
+                        </div>
+                      </td>
+                    </tr>
+                    {expanded && <tr><td colSpan={6} className="bg-slate-50 p-3">
+                      <div className="overflow-x-auto">
+                        <table aria-label={`${farmer.raiserName} farm parcels`} className="w-full min-w-[1200px] border-collapse text-left">
+                          <thead className="bg-gov-canvas text-gov-muted">
+                            <tr className="border-b border-gov-line text-[10px] uppercase tracking-wider">
+                              {['Select parcel', 'Farm Parcel', 'Farmer Name', 'Barangay', 'Rice Variety', 'Tenure',
+                                'Area (ha)', 'Production (MT)', 'Ecosystem', 'Date', 'Verification', 'Actions'].map((label, index) => (
+                                <th key={label} scope="col" className="whitespace-nowrap px-3 py-2">
+                                  <span className={index === 0 ? 'sr-only' : undefined}>{label}</span>
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gov-line">
+                {farms.map((parcel, idx) => {
                   const isAuthorized = isUserAuthorizedForBarangay(currentUser, parcel.barangay);
                   const isEditing = editingTag === parcel.tagNumber && inlineEditData !== null;
                   const isSelected = selectedTags.includes(parcel.tagNumber);
@@ -1437,16 +1461,12 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                     !isNaN(parcel.lat) &&
                     !isNaN(parcel.lng)
                   );
-                  const hasPolygonMapped = Boolean(
-                    (parcel.boundaryCoords && parcel.boundaryCoords.length >= 3) ||
-                    (parcel.polygonCoords && Array.isArray(parcel.polygonCoords) && parcel.polygonCoords.length >= 3)
-                  );
                   const seasonalRecord = getSeasonRecord(parcel, selectedSeason);
                   const showParcelCrop = matchesSeasonFilter(parcel.croppingSeason || parcel.season, selectedSeason);
                   const activeVariety = getRecordedCropValue(seasonalRecord?.seedVariety ?? (showParcelCrop ? parcel.breed : ''));
                   const activeSeedType = getRecordedCropValue(seasonalRecord?.seedType ?? (showParcelCrop ? parcel.seedType : ''));
                   const tenure = getRecordedCropValue(seasonalRecord?.tenure ?? (showParcelCrop ? parcel.sex : ''));
-                  const ecosystem = getRecordedCropValue(seasonalRecord?.ecosystem ?? (showParcelCrop ? parcel.purpose || parcel.ecosystem : ''));
+                  const ecosystem = getRecordedCropValue(seasonalRecord?.ecosystem ?? (parcel.ecosystem || parcel.purpose));
                   const ecoBadge = getEcosystemBadge(ecosystem);
 
                   if (isEditing && inlineEditData) {
@@ -1664,8 +1684,8 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                             title="Click to open Farmer Profile Dossier"
                           >
                             <span className="text-gov-muted text-[10px]">#</span>
-                            <span>{parcel.swineNameOrId || parcel.tagNumber}</span>
-                            <span className="text-xs font-semibold text-emerald-800">{farmLabel(parcel)} · {parcel.parcelVerificationStatus || 'Pending Verification'}</span>
+                            <span>{farmLabel(parcel)}</span>
+                            <span className="text-gov-muted">{parcel.tagNumber}</span>
                           </button>
                           {(parcel.is_pending_sync || parcel.isPendingSync) && (
                             <span
@@ -1758,22 +1778,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
                       {/* 11. STATUS */}
                       <td className="w-24 min-w-[90px] py-2 px-2 text-center whitespace-nowrap border-r border-stone-200">
-                        {hasPolygonMapped ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
-                            Verified
-                          </span>
-                        ) : hasGpsCoordinates ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-gov-green">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                            Pending
-                          </span>
-                        )}
+                        {parcel.parcelVerificationStatus || 'Pending Verification'}
                       </td>
 
                       {/* 12. ACTIONS */}
@@ -1789,6 +1794,11 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                             View
                           </button>
 
+                          {!showArchived && currentUser && isAuthorized && onOpenCropPlanting && (
+                            <button type="button" className="rounded border px-2 py-1" onClick={() => onOpenCropPlanting(parcel)}>
+                              Record Crop / Seed
+                            </button>
+                          )}
                           {/* 2. Certificate */}
                           <button
                             type="button"
@@ -1838,6 +1848,12 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                       </td>
                     </tr>
                   );
+                })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </td></tr>}
+                  </React.Fragment>;
                 })
               )}
             </tbody>
@@ -1849,7 +1865,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>
-              Showing {paginatedParcels.length > 0 ? `${(currentPage - 1) * itemsPerPage + 1}-${Math.min(currentPage * itemsPerPage, filteredParcels.length)}` : '0-0'} of {filteredParcels.length} matching rice farms
+              Showing {tableSummary} of {farmerGroups.length} farmers
             </span>
             <span className="text-stone-300">&bull;</span>
             <span>
@@ -1879,19 +1895,19 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
-                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(Math.max(page - 1, 1))}
+                  disabled={page === 1}
                   className="px-2.5 py-1 rounded-lg border border-stone-300 bg-white hover:bg-stone-50 text-stone-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed font-medium shadow-2xs text-xs"
                 >
                   Prev
                 </button>
                 <span className="px-2 text-xs font-semibold text-stone-700">
-                  {currentPage} / {totalPages}
+                  {page} / {totalPages}
                 </span>
                 <button
                   type="button"
                   onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
-                  disabled={currentPage === totalPages}
+                  disabled={page === totalPages}
                   className="px-2.5 py-1 rounded-lg border border-stone-300 bg-white hover:bg-stone-50 text-stone-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed font-medium shadow-2xs text-xs"
                 >
                   Next

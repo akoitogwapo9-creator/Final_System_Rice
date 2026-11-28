@@ -132,6 +132,7 @@ export function normalizeSeasonalRecord(
     seasonName: getShortSeasonName(season),
     seedVariety,
     varietyPlanted: seedVariety,
+    seedQuantityKg: rec.seedQuantityKg,
     seedType: rec.seedType ?? '',
     ecosystem: rec.ecosystem,
     irrigationAssociation: rec.irrigationAssociation,

@@ -120,6 +120,8 @@ const AppContent: React.FC = () => {
   const [selectedParcel, setSelectedParcel] = useState<FarmParcel | null>(null);
   const [openCertificateOnLoad, setOpenCertificateOnLoad] = useState(false);
   const [selectedBarangay, setSelectedBarangay] = useState<Barangay | null>(null);
+  const [addFarmFarmer, setAddFarmFarmer] = useState<FarmParcel | null>(null);
+  const [cropFarmerOnly, setCropFarmerOnly] = useState(false);
   const [isAddParcelOpen, setIsAddParcelOpen] = useState(false);
   const [editingParcel, setEditingParcel] = useState<FarmParcel | null>(null);
   const [distributionView, setDistributionView] = useState<'inventory' | 'programs'>('inventory');
@@ -324,6 +326,8 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     if (currentUser) return;
+    setAddFarmFarmer(null);
+    setCropFarmerOnly(false);
     setIsAddParcelOpen(false);
     setEditingParcel(null);
     setInitialCoordsForAdd(null);
@@ -949,19 +953,21 @@ const AppContent: React.FC = () => {
                     setEditingParcel(p);
                     setIsAddParcelOpen(true);
                   }}
-                  onOpenAddParcel={() => {
+                  onOpenAddParcel={(farmer) => {
                     if (!currentUser) {
                       setIsLoginModalOpen(true);
                       return;
                     }
+                    setAddFarmFarmer(farmer || null);
                     setEditingParcel(null);
                     setIsAddParcelOpen(true);
                   }}
-                  onOpenCropPlanting={(p) => {
+                  onOpenCropPlanting={(p, farmerOnly) => {
                     if (!currentUser) {
                       setIsLoginModalOpen(true);
                       return;
                     }
+                    setCropFarmerOnly(Boolean(farmerOnly));
                     setCropTargetParcel(p || null);
                     setIsCropPlantingOpen(true);
                   }}
@@ -1081,12 +1087,14 @@ const AppContent: React.FC = () => {
         isOpen={Boolean(currentUser) && isAddParcelOpen}
         onClose={() => {
           setIsAddParcelOpen(false);
+          setAddFarmFarmer(null);
           setEditingParcel(null);
           setInitialCoordsForAdd(null);
         }}
         onSave={handleSaveParcel}
         onDelete={deleteParcel}
         editingParcel={editingParcel}
+        initialFarmer={addFarmFarmer}
         initialCoords={initialCoordsForAdd}
         defaultBarangay={currentUser?.barangay}
       />
@@ -1094,9 +1102,11 @@ const AppContent: React.FC = () => {
       <CropPlantingModal
         isOpen={Boolean(currentUser) && isCropPlantingOpen}
         initialParcel={cropTargetParcel}
+        farmerOnly={cropFarmerOnly}
         onClose={() => {
           setIsCropPlantingOpen(false);
           setCropTargetParcel(null);
+          setCropFarmerOnly(false);
         }}
       />
 

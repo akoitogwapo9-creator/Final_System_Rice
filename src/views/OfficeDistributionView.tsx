@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useApp } from '../context/AppContext';
-import { farmLabel, farmerKey, groupFarmerParcels } from '../data/officeRegistry';
+import { farmLabel, farmerKey, parcelDescription } from '../data/officeRegistry';
 import { isUserAuthorizedForBarangay } from '../data/barangays';
 import { getParcelSeasonOptions } from '../data/seasonalProduction';
+import { FarmerCombobox } from '../components/FarmerCombobox';
+import { useFarmerParcels } from '../hooks/useFarmerParcels';
 import { supabaseClient } from '../utils/supabaseClient';
 import { OFFICE_INPUT_CLASS, OFFICE_SELECT_CLASS } from '../components/OfficeFormPrimitives';
 import {
@@ -22,6 +24,8 @@ export function OfficeDistributionView({ onOpenCrops }: { onOpenCrops: () => voi
   const [entryType, setEntryType] = useState<DistributionDraft['entry_type']>('Release');
   const [farmer, setFarmer] = useState('');
   const [parcelId, setParcelId] = useState('');
+  const [batch, setBatch] = useState(false);
+  const [batchTags, setBatchTags] = useState<string[]>([]);
   const [log, setLog] = useState<DistributionEntry[]>([]);
   const [stock, setStock] = useState<StockItem[]>([]);
   const [queue, setQueue] = useState<DistributionDraft[]>([]);
@@ -31,9 +35,18 @@ export function OfficeDistributionView({ onOpenCrops }: { onOpenCrops: () => voi
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const syncing = useRef(false);
-  const requestId = useRef<string | null>(null);
-  const available = parcels.filter(p => !p.isArchived && isUserAuthorizedForBarangay(currentUser, p.barangay));
-  const parcel = available.find(p => p.tagNumber === parcelId);
+  const available = useMemo(() => parcels.filter(p => !p.isArchived && !p.is_archived &&
+    isUserAuthorizedForBarangay(currentUser, p.barangay)), [parcels, currentUser]);
+  const selectedFarmer = available.find(p => farmerKey(p) === farmer);
+  const { farms, loading: farmsLoading, cached: useCachedFarms } = useFarmerParcels(selectedFarmer, available, entryType !== 'Restock');
+  const farmerFarms = farms.filter(p => isUserAuthorizedForBarangay(currentUser, p.barangay));
+  const parcel = farmerFarms.find(p => p.tagNumber === parcelId);
+  const batchFarms = farmerFarms.filter(p => batchTags.includes(p.tagNumber));
+  const resetParcels = () => {
+    setParcelId('');
+    setBatchTags([]);
+    setBatch(false);
+  };
 
   const sync = useCallback(async () => {
     if (syncing.current) return;
@@ -86,50 +99,80 @@ export function OfficeDistributionView({ onOpenCrops }: { onOpenCrops: () => voi
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    const stockItem = entryType === 'Release' ? stock.find(item => JSON.stringify([item.item, item.category, item.unit]) === data.get('stock')) : undefined;
-    const entry: DistributionDraft = {
-      id: requestId.current || crypto.randomUUID(), entry_type: entryType,
-      parcel_id: entryType === 'Restock' ? null : parcelId,
-      season: String(data.get('season') || '').trim(),
-      acknowledgment: String(data.get('acknowledgment') || '').trim(),
-      item: stockItem?.item || String(data.get('item') || '').trim(),
-      category: stockItem?.category || data.get('category') as StockItem['category'],
-      unit: stockItem?.unit || data.get('unit') as StockItem['unit'],
-      quantity: Number(data.get('quantity'))
-    };
-    if (!entry.item || !Number.isFinite(entry.quantity) || entry.quantity <= 0 ||
-        (entryType !== 'Restock' && (!parcel || !entry.season))) {
-      setError('Complete the item, quantity, parcel, and season fields for this entry.');
+    if (busy) return;
+    const tags = entryType === 'Restock' ? [null] : batch ? batchTags : parcel ? [parcel.tagNumber] : [];
+    const entries: DistributionDraft[] = tags.map(tag => {
+      const suffix = batch && tag ? `:${tag}` : '';
+      const stockItem = entryType === 'Release' ? stock.find(item =>
+        JSON.stringify([item.item, item.category, item.unit]) === data.get(`stock${suffix}`)) : undefined;
+      return {
+        id: crypto.randomUUID(), entry_type: entryType, parcel_id: tag,
+        season: String(data.get('season') || '').trim(),
+        acknowledgment: String(data.get('acknowledgment') || '').trim(),
+        item: stockItem?.item || String(data.get(`item${suffix}`) || '').trim(),
+        category: stockItem?.category || data.get(`category${suffix}`) as StockItem['category'],
+        unit: stockItem?.unit || data.get(`unit${suffix}`) as StockItem['unit'],
+        quantity: Number(data.get(`quantity${suffix}`))
+      };
+    });
+    if (!entries.length || entries.some(entry => !entry.item || !Number.isFinite(entry.quantity) || entry.quantity <= 0 ||
+        (entry.entry_type !== 'Restock' && (!farmerFarms.some(farm => farm.tagNumber === entry.parcel_id) || !entry.season)))) {
+      setError('Complete the item, quantity, parcel, and season fields for each transaction.');
       return;
     }
-    requestId.current = entry.id;
     setBusy(true);
     setError('');
     setStatus('');
+    let completed = 0;
     try {
-      if (navigator.onLine) {
-        try { await submitDistribution(entry); } catch (error) {
-          if (error?.code && !String(error.code).startsWith('08')) throw error;
-          localStorage.setItem(queueKey, JSON.stringify([...readDistributionQueue(queueKey), entry]));
+      for (const entry of entries) {
+        let queued = !navigator.onLine;
+        if (!queued) {
+          try { await submitDistribution(entry); } catch (error) {
+            if (error?.code && !String(error.code).startsWith('08')) throw error;
+            queued = true;
+          }
         }
-      } else {
-        localStorage.setItem(queueKey, JSON.stringify([...readDistributionQueue(queueKey), entry]));
+        if (queued) localStorage.setItem(queueKey, JSON.stringify([...readDistributionQueue(queueKey), entry]));
+        completed++;
       }
       const pending = readDistributionQueue(queueKey);
+      const queuedCount = entries.filter(entry => pending.some(item => item.id === entry.id)).length;
       setQueue(pending);
-      setStatus(pending.some(item => item.id === entry.id) ? 'Entry queued. Stock updates when it syncs.' : 'Entry recorded.');
-      requestId.current = null;
+      setStatus(`${entries.length - queuedCount} recorded · ${queuedCount} queued for sync.`);
       form.reset();
       setFarmer('');
-      setParcelId('');
+      resetParcels();
       if (navigator.onLine) await sync();
     } catch (error) {
-      requestId.current = null;
-      setError(error?.message || 'Unable to save the distribution entry.');
+      setQueue(readDistributionQueue(queueKey));
+      if (batch) {
+        const completedTags = new Set(entries.slice(0, completed).map(entry => entry.parcel_id));
+        setBatchTags(previous => previous.filter(tag => !completedTags.has(tag)));
+      }
+      const failedFarm = farmerFarms.find(farm => farm.tagNumber === entries[completed]?.parcel_id);
+      setError(`${completed ? `${completed} recorded or queued. ` : ''}${failedFarm ? `${farmLabel(failedFarm)}: ` : ''}${error?.message || 'Unable to save the distribution entry.'}`);
     } finally {
       setBusy(false);
     }
   };
+
+  const itemFields = (suffix = '') => <>
+    {entryType === 'Release'
+      ? <label>Stock item<select name={`stock${suffix}`} required className={OFFICE_SELECT_CLASS}>
+          <option value="">Select item</option>
+          {stock.map(item =>
+            <option key={`${item.category}/${item.item}/${item.unit}`} value={JSON.stringify([item.item, item.category, item.unit])} disabled={item.quantity <= 0}>
+              {item.item} · {item.category} · {item.quantity} {item.unit} remaining
+            </option>)}
+        </select></label>
+      : <>
+          <label>Item or variety<input name={`item${suffix}`} required className={OFFICE_INPUT_CLASS} /></label>
+          <label>Category<select name={`category${suffix}`} className={OFFICE_SELECT_CLASS}><option>Seed</option><option>Fertilizer</option></select></label>
+          <label>Unit<select name={`unit${suffix}`} className={OFFICE_SELECT_CLASS}>{['kg','bag','pack','L'].map(unit => <option key={unit}>{unit}</option>)}</select></label>
+        </>}
+    <label>Quantity<input required name={`quantity${suffix}`} type="number" min="0.001" step="any" className={OFFICE_INPUT_CLASS} /></label>
+  </>;
 
   const receipt = (entry: DistributionEntry) => {
     try {
@@ -166,50 +209,59 @@ export function OfficeDistributionView({ onOpenCrops }: { onOpenCrops: () => voi
         <p>{queue.length} pending distribution {queue.length === 1 ? 'entry' : 'entries'}.</p>
         <button type="button" className="font-semibold text-emerald-800" onClick={() => void sync()}>Retry sync</button>
       </div>}
-      <form onSubmit={save} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <form onSubmit={save}>
+        <fieldset disabled={busy} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <label>Transaction<select aria-label="Transaction" className={OFFICE_SELECT_CLASS} value={entryType}
-          onChange={e => setEntryType(e.target.value as DistributionDraft['entry_type'])}>
+          onChange={e => { setEntryType(e.target.value as DistributionDraft['entry_type']); resetParcels(); }}>
           <option value="Release">Release inputs</option><option value="Request">Request inputs</option>
           {isAdmin && <option value="Restock">Receive municipal stock</option>}
         </select></label>
         {entryType !== 'Restock' && <>
-          <label>Farmer<select aria-label="Farmer" required className={OFFICE_SELECT_CLASS} value={farmer} onChange={e => {
-            setFarmer(e.target.value);
-            setParcelId('');
-          }}>
-            <option value="">Select farmer</option>
-            {groupFarmerParcels(available).map(p =>
-              <option key={farmerKey(p)} value={farmerKey(p)}>{p.raiserName} · {p.swineNameOrId === 'NO RSBSA' ? p.tagNumber : p.swineNameOrId}</option>
-            )}
-          </select></label>
-          <label>Select Farm<select aria-label="Select Farm" required disabled={!farmer} className={OFFICE_SELECT_CLASS} value={parcelId}
-            onChange={e => setParcelId(e.target.value)}>
+          <div className="sm:col-span-2">
+            <FarmerCombobox parcels={available} value={farmer} onChange={key => {
+              if (key === farmer) return;
+              setFarmer(key);
+              resetParcels();
+            }} />
+            {farmsLoading && <p role="status">Loading registered parcels…</p>}
+            {useCachedFarms && <p role="status">Live parcel lookup unavailable. Showing known parcels.</p>}
+            {farmer && !farmsLoading && farmerFarms.length === 0 && <p>No available farm parcels.</p>}
+            {farmerFarms.length > 1 && <label className="mt-2 flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={batch} onChange={event => {
+                setBatch(event.target.checked);
+                setBatchTags(parcelId ? [parcelId] : []);
+              }} /> Allocate to multiple parcels
+            </label>}
+          </div>
+          {!batch && <label>Select Farm<select required disabled={!farmer} className={OFFICE_SELECT_CLASS} value={parcelId}
+            onChange={event => setParcelId(event.target.value)}>
             <option value="">Select parcel</option>
-            {available.filter(p => farmerKey(p) === farmer).map(p =>
-              <option key={p.tagNumber} value={p.tagNumber}>{farmLabel(p)} · {p.barangay} · {p.tagNumber}</option>
-            )}
-          </select></label>
-          <label>Cropping season<input aria-label="Cropping season" name="season" required list="distribution-seasons" className={OFFICE_INPUT_CLASS} />
-            <datalist id="distribution-seasons">{getParcelSeasonOptions(parcel ? [parcel] : []).map(season =>
+            {farmerFarms.map(p => <option key={p.tagNumber} value={p.tagNumber}>{parcelDescription(p)}</option>)}
+          </select></label>}
+          <label>Cropping season<input name="season" required list="distribution-seasons" className={OFFICE_INPUT_CLASS} />
+            <datalist id="distribution-seasons">{getParcelSeasonOptions(batch ? batchFarms : parcel ? [parcel] : []).map(season =>
               <option key={season} value={season} />)}</datalist>
           </label>
         </>}
-        {entryType === 'Release'
-          ? <label>Stock item<select aria-label="Stock item" name="stock" required className={OFFICE_SELECT_CLASS}>
-              <option value="">Select item</option>
-              {stock.map(item =>
-                <option key={`${item.category}/${item.item}/${item.unit}`} value={JSON.stringify([item.item, item.category, item.unit])} disabled={item.quantity <= 0}>
-                  {item.item} · {item.category} · {item.quantity} {item.unit} remaining
-                </option>)}
-            </select></label>
-          : <>
-              <label>Item or variety<input name="item" required className={OFFICE_INPUT_CLASS} /></label>
-              <label>Category<select name="category" className={OFFICE_SELECT_CLASS}><option>Seed</option><option>Fertilizer</option></select></label>
-              <label>Unit<select name="unit" className={OFFICE_SELECT_CLASS}>{['kg','bag','pack','L'].map(unit => <option key={unit}>{unit}</option>)}</select></label>
-            </>}
-        <label>Quantity<input required name="quantity" type="number" min="0.001" step="any" className={OFFICE_INPUT_CLASS} /></label>
+        {batch ? <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2 lg:col-span-3 lg:grid-cols-3">
+          {farmerFarms.map(farm => {
+            const tag = farm.tagNumber;
+            const included = batchTags.includes(tag);
+            return <div key={tag} className="space-y-2 rounded border border-slate-300 p-3">
+              <label className="flex items-start gap-2 text-sm font-semibold">
+                <input type="checkbox" checked={included} onChange={event => {
+                  const checked = event.target.checked;
+                  setBatchTags(previous => checked ? [...previous, tag] : previous.filter(value => value !== tag));
+                }} />
+                {parcelDescription(farm)}
+              </label>
+              {included && itemFields(`:${tag}`)}
+            </div>;
+          })}
+        </div> : itemFields()}
         {entryType === 'Release' && <label>Acknowledgment reference or recipient<input name="acknowledgment" className={OFFICE_INPUT_CLASS} /></label>}
-        <div className="sm:col-span-2 lg:col-span-3"><button className={action} disabled={busy}>{busy ? 'Saving…' : 'Save transaction'}</button></div>
+        <div className="sm:col-span-2 lg:col-span-3"><button className={action} disabled={busy || (batch && !batchTags.length)}>{busy ? 'Saving…' : batch ? `Save ${batchTags.length} transactions` : 'Save transaction'}</button></div>
+        </fieldset>
       </form>
     </section>
     <section className={card}>

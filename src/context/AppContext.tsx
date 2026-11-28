@@ -218,7 +218,7 @@ interface AppContextType {
   updateCurrentUserPassword: (currentPassword: string, newPassword: string) => Promise<string | null>;
   parcels: FarmParcel[];
   addParcel: (parcel: FarmParcel, additionalParcels?: FarmParcel[]) => Promise<void>;
-  updateParcel: (tagNumber: string, updated: Partial<FarmParcel>) => Promise<void>;
+  updateParcel: (tagNumber: string, updated: Partial<FarmParcel>, loadedParcel?: FarmParcel) => Promise<void>;
   deleteParcel: (tagNumber: string) => Promise<void>;
   deleteBulkParcels: (tagNumbers: string[]) => Promise<void>;
   resetParcels: () => void;
@@ -1221,8 +1221,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     }
   };
 
-  const updateParcel = async (tagNumber: string, updatedFields: Partial<FarmParcel>) => {
-    const existing = parcels.find((p) => p.tagNumber === tagNumber);
+  const updateParcel = async (tagNumber: string, updatedFields: Partial<FarmParcel>, loadedParcel?: FarmParcel) => {
+    const cached = parcels.find((p) => p.tagNumber === tagNumber);
+    const existing = loadedParcel?.tagNumber === tagNumber && !cached?.isPendingSync && !cached?.is_pending_sync
+      ? loadedParcel : cached;
     if (existing) {
       const canUpdateCrop = !!updatedFields.seasonalRecords &&
         Object.keys(updatedFields).every((key) => CROP_UPDATE_KEYS.has(key)) &&
@@ -1235,7 +1237,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         const [saved] = await supabaseDb.upsertParcels([targetUpdated]);
         if (activeParcelOwner.current !== parcelOwner) return;
         setParcels(previous => {
-          const updated = previous.map(parcel => parcel.tagNumber === tagNumber ? saved : parcel);
+          const updated = previous.some(parcel => parcel.tagNumber === tagNumber)
+            ? previous.map(parcel => parcel.tagNumber === tagNumber ? saved : parcel)
+            : sortParcelsAlphabetically([...previous, saved]);
           cacheParcels(updated);
           return updated;
         });
