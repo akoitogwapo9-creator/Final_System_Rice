@@ -1,3 +1,4 @@
+import { farmerKey, farmLabel, groupFarmerParcels } from '../data/officeRegistry';
 import React, { useEffect, useMemo, useState } from 'react';
 import { getParcelSeasonOptions, getRecordedCropValue, getSeasonRecord, hasActualProduction, matchesSeasonFilter, normalizeSeasonalRecord, seasonOrder } from '../data/seasonalProduction';
 import { FarmParcel, SeasonalProductionRecord } from '../types';
@@ -64,6 +65,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
 
   const formSchema = useRegistryFormSchema();
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedFarmer, setSelectedFarmer] = useState('');
   const [selectedParcel, setSelectedParcel] = useState<FarmParcel | null>(null);
   const [manageType, setManageType] = useState<ManageType | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -91,9 +93,11 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
     setIsSubmitting(false);
     setSearchQuery('');
     if (initialParcel) {
+      setSelectedFarmer(farmerKey(initialParcel));
       setSelectedParcel(initialParcel);
       populateFromParcel(initialParcel);
     } else {
+      setSelectedFarmer('');
       setSelectedParcel(null);
       setCropData({ ...EMPTY_CROP_DATA });
       setCustomValues({});
@@ -101,7 +105,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
   }, [isOpen, initialParcel]);
 
   const authorizedFarmers = useMemo(() => {
-    return parcels.filter((p) => isUserAuthorizedForBarangay(currentUser, p.barangay));
+    return parcels.filter((p) => !p.isArchived && isUserAuthorizedForBarangay(currentUser, p.barangay));
   }, [parcels, currentUser]);
 
   const matchingFarmers = useMemo(() => {
@@ -157,7 +161,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
     setError(null);
 
     if (!selectedParcel) {
-      setError('Please select a registered farmer before saving.');
+      setError('Select the farm parcel before saving.');
       return;
     }
     if (!isUserAuthorizedForBarangay(currentUser, selectedParcel.barangay)) {
@@ -186,7 +190,6 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
       ...getParcelCustomFields(selectedParcel.tagNumber),
       ...(selectedParcel.customFields || {})
     });
-    saveParcelCustomFields(selectedParcel.tagNumber, mergedCustomValues);
 
     const targetYieldMt = cropData.targetYieldMt.trim() ? Number(cropData.targetYieldMt) : null;
     const latestParcel = parcels.find((parcel) => parcel.tagNumber === selectedParcel.tagNumber) || selectedParcel;
@@ -234,8 +237,6 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
         healthStatus: seasonRecord.productionStatus === 'Harvest Completed' ? 'Harvested' : phenology?.stage || 'Not recorded',
         standingCropStage: phenology?.stage || '',
         ageMonths: phenology?.dap || 0,
-        purpose: cropData.purpose,
-        ecosystem: cropData.purpose,
         irrigationAssociation: cropData.irrigationAssociation,
         sex: cropData.sex,
         tenure: cropData.sex
@@ -245,22 +246,11 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
 
     setIsSubmitting(true);
     try {
-      await withTimeout(
-        Promise.resolve(updateParcel(selectedParcel.tagNumber, updatedParcel)),
-        8000,
-        'Connection timed out. Record saved to local queue.'
-      );
+      await updateParcel(selectedParcel.tagNumber, updatedParcel);
+      saveParcelCustomFields(selectedParcel.tagNumber, mergedCustomValues);
       onClose();
-    } catch (err: any) {
-      const isFetchError =
-        err?.message?.includes('fetch') ||
-        err?.message?.includes('Failed to fetch') ||
-        err?.name === 'TypeError';
-      if (isFetchError) {
-        onClose();
-      } else {
-        setError(err?.message || 'Error saving crop & planting details. Please try again.');
-      }
+    } catch (error) {
+      setError(error?.message || 'Unable to save crop and planting details.');
     } finally {
       setIsSubmitting(false);
     }
@@ -326,20 +316,22 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                       Select Registered Farmer <span className="text-red-600">*</span>
                     </label>
                     <select
-                      value={selectedParcel?.tagNumber || ''}
+                      aria-label="Select Registered Farmer"
+                      value={selectedFarmer}
                       onChange={(e) => {
-                        const found = authorizedFarmers.find((p) => p.tagNumber === e.target.value);
-                        if (found) handleSelectFarmer(found);
-                        else setSelectedParcel(null);
+                        setSelectedFarmer(e.target.value);
+                        setSelectedParcel(null);
+                        setCropData({ ...EMPTY_CROP_DATA });
+                        setError(null);
                       }}
                       className={OFFICE_SELECT_CLASS}
                     >
                       <option value="">
-                        -- Select Registered Farmer ({matchingFarmers.length}) --
+                        -- Select Registered Farmer ({groupFarmerParcels(matchingFarmers).length}) --
                       </option>
-                      {matchingFarmers.map((p) => (
-                        <option key={p.tagNumber} value={p.tagNumber}>
-                          {p.raiserName} — Brgy. {p.barangay} ({p.swineNameOrId || 'NO RSBSA'})
+                      {groupFarmerParcels(matchingFarmers).map((p) => (
+                        <option key={farmerKey(p)} value={farmerKey(p)}>
+                          {p.raiserName} · {p.swineNameOrId === 'NO RSBSA' ? p.tagNumber : p.swineNameOrId}
                         </option>
                       ))}
                     </select>
@@ -351,6 +343,21 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                     No registered farmer matched &ldquo;{searchQuery}&rdquo;.
                   </p>
                 )}
+
+                <label className="block space-y-1">
+                  <span className={OFFICE_LABEL_CLASS}>Select Farm <span className="text-red-600">*</span></span>
+                  <select aria-label="Select Farm" className={OFFICE_SELECT_CLASS} required disabled={!selectedFarmer}
+                    value={selectedParcel?.tagNumber || ''} onChange={event => {
+                      const parcel = authorizedFarmers.find(p => p.tagNumber === event.target.value && farmerKey(p) === selectedFarmer);
+                      if (parcel) handleSelectFarmer(parcel);
+                      else setSelectedParcel(null);
+                    }}>
+                    <option value="">Choose a farm parcel</option>
+                    {authorizedFarmers.filter(p => farmerKey(p) === selectedFarmer).map(p =>
+                      <option key={p.tagNumber} value={p.tagNumber}>{farmLabel(p)} · {p.barangay} · {p.tagNumber}</option>
+                    )}
+                  </select>
+                </label>
 
                 {selectedParcel && (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-md px-3 py-2 text-[11px]">
@@ -397,6 +404,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                         <OfficeFieldManageButton onClick={() => setManageType('season')} />
                       </div>
                       <select
+                        aria-label={formSchema.getLabel('crop-season', 'Cropping Season')}
                         required={formSchema.isRequired('crop-season')}
                         value={cropData.croppingSeason}
                         onChange={(e) => handleSeasonChange(e.target.value)}
@@ -428,6 +436,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
                         />
                       </div>
                       <select
+                        aria-label={formSchema.getLabel('crop-variety', 'Rice / Palay Variety')}
                         required={formSchema.isRequired('crop-variety')}
                         value={cropData.breed}
                         onChange={(e) => setCropData({ ...cropData, breed: e.target.value })}
@@ -676,7 +685,7 @@ export const CropPlantingModal: React.FC<CropPlantingModalProps> = ({
             <div className="bg-slate-50 px-5 py-3 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap shrink-0">
               <span className="text-[11px] font-medium text-slate-600">
                 {selectedParcel
-                  ? `Selected farmer: ${selectedParcel.raiserName}`
+                  ? `${selectedParcel.raiserName} · ${farmLabel(selectedParcel)}`
                   : 'Select a registered farmer to enable saving'}
               </span>
 

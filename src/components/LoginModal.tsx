@@ -4,7 +4,7 @@ import { User, isAccountActive } from '../types';
 import { OfficialSealsTrio } from './Seals';
 import { signInLftByUsername } from '../utils/staffAccounts';
 import { supabase } from '../supabase';
-import { DEFAULT_ADMIN_EMAIL, getVerifiedCentralAdmin, supabaseDb } from '../utils/supabaseClient';
+import { DEFAULT_ADMIN_EMAIL, supabaseDb } from '../utils/supabaseClient';
 import {
   getLoginLockoutRemainingSec,
   recordLoginFailure,
@@ -120,15 +120,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
         }
         return;
       }
-      const admin = auth.session && auth.user ? getVerifiedCentralAdmin(auth.user) : null;
-      if (admin) {
-        resetLoginRateLimit();
-        setCurrentUser(admin);
-        onClose();
-        onSuccess?.(admin);
-        return;
-      }
-
       let staff: User | null;
       try {
         staff = await supabaseDb.getStaffAccount();
@@ -143,7 +134,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
         return;
       }
       resetLoginRateLimit();
-      // The app resolves the authenticated session and role before opening the workspace.
+      const resolved = { ...staff, email: auth.user?.email || staff.email };
+      setCurrentUser(resolved);
+      onClose();
+      onSuccess?.(resolved);
     } catch (error) {
       if (error instanceof Error && error.message === 'Invalid username or password.') {
         const wait = recordLoginFailure();

@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useApp } from '../context/AppContext';
-import { BARANGAYS, getBarangayClassifications, getBarangayLabel, getBarangayZone, matchBarangay } from '../data/barangays';
+import { BARANGAYS, getBarangayClassifications, getBarangayLabel, getBarangayPublicSector, getBarangayZone, getPublicSectorLabel, matchBarangay, PublicBarangaySector } from '../data/barangays';
 import { DECREE_CATEGORIES, LegalDecree } from '../data/legalDecrees';
 import { findSilagoBarangayFeature } from '../data/silagoGeoJson';
 import { findBarangayBoundary } from '../data/barangayBoundaries';
@@ -462,7 +462,7 @@ function InlineBarangaySurveyMap({ barangay, points, onPointsChange, center, onC
 }
 
 export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (tab: PortalTab) => void; onMeasureBarangay: (barangay: Barangay) => void }) {
-  const { lftAccounts, parcels, permissions, barangayProfiles, updateBarangayProfile } = useApp();
+  const { lftAccounts, parcels, permissions, barangayProfiles, updateBarangayProfile, landingPageConfig } = useApp();
   if (!permissions.isCentralAdmin) {
     return (
       <div className="mx-auto max-w-xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-900">
@@ -474,6 +474,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
   }
   const [query, setQuery] = useState('');
   const [zoneFilter, setZoneFilter] = useState('');
+  const [sectorFilter, setSectorFilter] = useState<'' | PublicBarangaySector>('');
   const [boundaryEditorOpen, setBoundaryEditorOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const surveyorTopRef = useRef<HTMLDivElement | null>(null);
@@ -526,7 +527,8 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
 
   const filteredRows = rows.filter((row) => {
     const zone = getBarangayZone(row.name, barangayProfiles);
-    return (!zoneFilter || (zoneFilter === 'non-coastal' ? zone !== 'Coastal' : zone === zoneFilter)) &&
+    return (!sectorFilter || getBarangayPublicSector(row.name, barangayProfiles) === sectorFilter) &&
+      (!zoneFilter || (zoneFilter === 'non-coastal' ? zone !== 'Coastal' : zone === zoneFilter)) &&
       `${getBarangayLabel(row.name, barangayProfiles)} ${row.focalPerson} ${row.terrain}`.toLowerCase().includes(query.trim().toLowerCase());
   });
   const zoneColors: Record<string, string> = {
@@ -783,7 +785,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
       {/* 2. BOTTOM SECTION: SEARCH & BARANGAYS TABLE (Matching Reference Image 2) */}
       <section className={`${card} overflow-hidden`}>
         {/* Search bar */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 p-4">
+        <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 p-4">
           <div className="relative w-full sm:max-w-md">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <input
@@ -799,6 +801,11 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
             <option value="">All Zones</option>
             <option value="non-coastal">All Non-Coastal Zones</option>
             {getBarangayClassifications(barangayProfiles).map((zone) => <option key={zone}>{zone}</option>)}
+          </select>
+          <select aria-label="Filter by public sector" value={sectorFilter} onChange={(event) => setSectorFilter(event.target.value as '' | PublicBarangaySector)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+            <option value="">All Public Sectors</option>
+            {(['coastal', 'inland'] as const).map((sector) => <option key={sector} value={sector}>{getPublicSectorLabel(sector, landingPageConfig)}</option>)}
           </select>
           <span className="text-xs text-slate-400 font-medium">
             Total: {filteredRows.length} barangays
@@ -822,6 +829,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
                 <tr key={b.name} className="transition hover:bg-slate-50/80">
                   <td className="px-4 py-3.5 font-semibold text-slate-900">
                     {getBarangayLabel(b.name, barangayProfiles)}
+                    <div className="mt-1 font-normal text-slate-600">{getPublicSectorLabel(getBarangayPublicSector(b.name, barangayProfiles), landingPageConfig)}</div>
                   </td>
                   <td className="px-4 py-3.5">
                     <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold ${zoneColors[getBarangayZone(b.name, barangayProfiles)] || 'border-slate-200 bg-slate-50 text-slate-700'}`}>
@@ -863,7 +871,7 @@ export function BarangaysView({ onNavigate, onMeasureBarangay }: { onNavigate: (
               {filteredRows.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-4 py-10 text-center text-xs text-slate-400">
-                    No barangays match your search.
+                    No barangays match your search or filters.
                   </td>
                 </tr>
               )}

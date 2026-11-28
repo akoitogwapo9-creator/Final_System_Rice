@@ -120,6 +120,11 @@ function compressImageFileToDataUrl(file: File, maxWidth = 1600, quality = 0.82)
   });
 }
 
+export async function uploadHeroBackgroundImage(file: File, uploadPrefix = 'landing_hero_bg'): Promise<string> {
+  const publicUrl = await uploadFarmPhoto(file, uploadPrefix);
+  return publicUrl || await compressImageFileToDataUrl(file);
+}
+
 interface LayerControlsProps {
   sectionTitle: string;
   uploadPrefix: string;
@@ -176,14 +181,8 @@ const BackgroundLayerControls: React.FC<LayerControlsProps> = ({
 
     setIsUploading(true);
     try {
-      const publicUrl = await uploadFarmPhoto(file, uploadPrefix);
-      if (publicUrl) {
-        onImageChange(publicUrl);
-        onNotify?.('success', `${sectionTitle} uploaded. Click Save to publish.`);
-        return;
-      }
-      const compressedUrl = await compressImageFileToDataUrl(file);
-      onImageChange(compressedUrl);
+      const url = await uploadHeroBackgroundImage(file, uploadPrefix);
+      onImageChange(url);
       onNotify?.('success', `${sectionTitle} loaded. Click Save to publish.`);
     } catch {
       onNotify?.('error', 'Could not load the selected image. Please try another file.');

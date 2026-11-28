@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { BARANGAYS, getBarangayLabel, getBarangayPublicSector, getCoverageDescription, getPublicSectorLabel, PublicBarangaySector } from '../data/barangays';
+import { BARANGAYS, getBarangayLabel, getBarangayPublicSector, getCoverageDescription, getBarangayZone, getPublicSectorLabel, PublicBarangaySector } from '../data/barangays';
 import { DECREE_CATEGORIES, LegalDecree } from '../data/legalDecrees';
 import { Barangay, PortalTab } from '../types';
 import { SilagoSeal, BagOngSilagoLogo, OfficialSealsTrio } from './Seals';
@@ -687,6 +687,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <span className="flex items-start justify-between gap-2">
                   <span className="font-semibold text-xs sm:text-sm text-gov-ink group-hover:text-gov-green transition">
                     {getBarangayLabel(b.name, barangayProfiles)}
+                    <span className="mt-1 block text-xs font-medium text-gov-muted">{getBarangayZone(b.name, barangayProfiles)}</span>
                   </span>
                   <span className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1 transition-all ${ecoStyle.dotClass}`} />
                 </span>

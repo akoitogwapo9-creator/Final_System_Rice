@@ -1,13 +1,12 @@
-import { defaultBarangayPublicSector, getBarangayLabel, getBarangayPublicSector, getCoverageDescription, getPublicSectorLabel, OFFICIAL_15_BARANGAYS, PublicBarangaySector } from '../data/barangays';
 import { DEFAULT_REGISTRY_PREFERENCES, MAP_LAYER_OPTIONS, normalizeRegistryPreferences, RegistryPreferences } from '../data/registryPreferences';
 import React, { useState, useRef, useEffect } from 'react';
 import { DEFAULT_LANDING_PAGE_CONFIG, DEFAULT_MUNICIPAL_BRANDING, DEFAULT_OFFICE_CONTACT_INFO, useApp } from '../context/AppContext';
 import { SilagoSeal, DaLogo, BagOngSilagoLogo, SlsuBadge, OfficialSealsTrio } from '../components/Seals';
 import { MediaSettingsActions, PhotosView } from './PhotosView';
-import { HeroBackgroundEditor, HeroBgPatch } from '../components/HeroBackgroundEditor';
+import { uploadHeroBackgroundImage } from '../components/HeroBackgroundEditor';
 import { SLSU_EXTENSION_PRESETS, DEFAULT_SLSU_PHOTO } from '../data/photos';
 import { getOfflinePendingFarms, uploadFarmPhoto, supabaseDb } from '../utils/supabaseClient';
-import { LandingPageConfig, MandateCardItem } from '../types';
+import { LandingPageConfig } from '../types';
 import {
   Settings as SettingsIcon,
   UserCheck,
@@ -38,22 +37,18 @@ import {
   Sparkles,
   ExternalLink,
   Check,
-  Layout,
   Globe,
-  Clock,
-  Trash2,
-  Plus,
-  Edit3,
-  Layers
+  Clock
 } from 'lucide-react';
 
 interface SettingsViewProps {
   onNavigateToLanding?: () => void;
+  onManageBarangays: () => void;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding, onManageBarangays }) => {
   const {
-    currentUser, updatePublicBarangaySectors, registryPreferences, saveRegistryPreferences, seasons, isOnline, isRealtimeSyncing, offlineQueueCount, syncOfflineQueue, syncWithSupabase, resetParcels, flushAdminSettings, flushBarangayProfiles, getPendingSettings,
+    currentUser, registryPreferences, saveRegistryPreferences, seasons, isOnline, isRealtimeSyncing, offlineQueueCount, syncOfflineQueue, syncWithSupabase, resetParcels, flushAdminSettings, flushBarangayProfiles, getPendingSettings,
     updateCurrentUserProfile,
     updateCurrentUserPassword,
     adminProfile,
@@ -88,11 +83,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
     updateMunicipalBranding,
     resetMunicipalBranding,
     landingPageConfig,
-    updateLandingPageConfig,
-    resetLandingPageConfig,
-    addMandateCard,
-    updateMandateCard,
-    deleteMandateCard
+    updateLandingPageConfig
   } = useApp();
 
   const isCentralAdmin = currentUser?.role === 'Central Admin';
@@ -128,71 +119,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
     setSettingsDraft((previous) => ({ ...previous, [key]: value }));
 
 
-  const [sectorDraft, setSectorDraft] = useState<Record<string, PublicBarangaySector>>({});
-
-  // Landing Page Configuration Form State
-  const [landingForm, setLandingForm] = useState<LandingPageConfig>(() => ({
-    ...landingPageConfig, coverageDesc: getCoverageDescription(landingPageConfig.coverageDesc)
-  }));
+  const { heroHeadline, heroDescription, heroBgImageUrl } = landingPageConfig;
+  const [landingForm, setLandingForm] = useState<Pick<LandingPageConfig, 'heroHeadline' | 'heroDescription' | 'heroBgImageUrl'>>(
+    () => ({ heroHeadline, heroDescription, heroBgImageUrl })
+  );
+  const [uploadingLandingImage, setUploadingLandingImage] = useState(false);
 
   useEffect(() => {
-    if (landingPageConfig) {
-      setLandingForm({
-        ...landingPageConfig,
-        coverageDesc: getCoverageDescription(landingPageConfig.coverageDesc),
-        mandateCards: Array.isArray(landingPageConfig.mandateCards) ? [...landingPageConfig.mandateCards] : []
-      });
+    setLandingForm({ heroHeadline, heroDescription, heroBgImageUrl });
+  }, [heroHeadline, heroDescription, heroBgImageUrl]);
+
+  const handleLandingImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/') || file.size > 15 * 1024 * 1024) {
+      showToast('error', 'Select an image file up to 15 MB.');
+      return;
     }
-  }, [landingPageConfig]);
-
-  const saveLandingCoverage = async () => {
-    updateLandingPageConfig(landingForm);
-    if (!Object.keys(sectorDraft).length) return true;
-    const synced = await updatePublicBarangaySectors(sectorDraft);
-    setSectorDraft((draft) => Object.fromEntries(Object.entries(draft).filter(([name, sector]) => sectorDraft[name] !== sector)));
-    return synced;
-  };
-
-  const handleSaveLandingPage = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!isCentralAdmin) return;
-    const profilesSynced = await saveLandingCoverage();
-    const contentSynced = await flushAdminSettings();
-    showToast('success', profilesSynced && contentSynced ? 'Landing page settings saved.' : 'Saved on this device. Cloud sync is pending.');
-  };
-
-  const handleResetLandingPage = () => {
-    if (window.confirm('Reset all landing page badges, headlines, portals, and mandate cards to default municipal settings?')) {
-      resetLandingPageConfig();
-      showToast('success', 'Landing Page content restored to municipal defaults.');
+    setUploadingLandingImage(true);
+    try {
+      const url = await uploadHeroBackgroundImage(file);
+      setLandingForm((draft) => ({ ...draft, heroBgImageUrl: url }));
+    } catch {
+      showToast('error', 'Unable to load the selected image.');
+    } finally {
+      setUploadingLandingImage(false);
     }
-  };
-
-  const handleAddLocalMandateCard = () => {
-    const newCard: MandateCardItem = {
-      id: `mandate-${Date.now()}`,
-      tag: 'NEW MUNICIPAL INITIATIVE',
-      title: 'Title of Project or Program',
-      description: 'Detailed description of the municipal initiative, agricultural decree, or research partnership.'
-    };
-    setLandingForm((prev) => ({
-      ...prev,
-      mandateCards: [...prev.mandateCards, newCard]
-    }));
-  };
-
-  const handleUpdateLocalMandateCard = (id: string, field: keyof MandateCardItem, value: string) => {
-    setLandingForm((prev) => ({
-      ...prev,
-      mandateCards: prev.mandateCards.map((c) => (c.id === id ? { ...c, [field]: value } : c))
-    }));
-  };
-
-  const handleDeleteLocalMandateCard = (id: string) => {
-    setLandingForm((prev) => ({
-      ...prev,
-      mandateCards: prev.mandateCards.filter((c) => c.id !== id)
-    }));
   };
 
   // Office Hours & Hotline Form State
@@ -1242,8 +1195,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
       setContactForm(DEFAULT_OFFICE_CONTACT_INFO);
     }
     if (activeSubTab === 'landing') {
-      setLandingForm(DEFAULT_LANDING_PAGE_CONFIG);
-      setSectorDraft(Object.fromEntries(OFFICIAL_15_BARANGAYS.map((name) => [name, defaultBarangayPublicSector(name)])));
+      setLandingForm({
+        heroHeadline: DEFAULT_LANDING_PAGE_CONFIG.heroHeadline,
+        heroDescription: DEFAULT_LANDING_PAGE_CONFIG.heroDescription,
+        heroBgImageUrl: DEFAULT_LANDING_PAGE_CONFIG.heroBgImageUrl
+      });
     }
     if (activeSubTab === 'display') setLanguageDraft('EN');
     if (activeSubTab === 'media') { mediaActions.current?.reset(); return; }
@@ -1259,14 +1215,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
         updateMunicipalBranding(brandingForm);
         updateOfficeContactInfo(contactForm);
       }
-      const coverageSynced = activeSubTab !== 'landing' || await saveLandingCoverage();
+      if (activeSubTab === 'landing') updateLandingPageConfig({
+        ...landingForm,
+        heroHeadline: landingForm.heroHeadline.trim(),
+        heroDescription: landingForm.heroDescription.trim(),
+        heroBgImageUrl: landingForm.heroBgImageUrl?.trim() || ''
+      });
       if (activeSubTab === 'display') setLanguage(languageDraft);
       const normalized = normalizeRegistryPreferences(settingsDraft);
       const changes = Object.fromEntries(preferenceKeys.map((key) => [key, normalized[key]]));
       setSettingsDraft((draft) => ({ ...draft, ...changes }));
       const synced = await saveRegistryPreferences(changes);
       const contentSynced = await flushAdminSettings();
-      showToast('success', synced && contentSynced && coverageSynced ? 'Settings saved.' : 'Settings saved on this device. Cloud sync is pending.');
+      showToast('success', synced && contentSynced ? 'Settings saved.' : 'Settings saved on this device. Cloud sync is pending.');
     } catch {
       showToast('error', 'Settings could not be saved. Please try again.');
     } finally {
@@ -1334,8 +1295,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-lg font-bold text-blue-950">Settings</h1>
           {activeSubTab !== 'maintenance' && <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={resetSettingsDraft} className={actionStyle}>Reset Defaults</button>
-            <button type="button" disabled={savingSettings} onClick={saveSettings} className="rounded-md bg-blue-700 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-50">{savingSettings ? 'Saving…' : 'Save All Changes'}</button>
+            <button type="button" onClick={resetSettingsDraft} disabled={activeSubTab === 'landing' && uploadingLandingImage} className={actionStyle}>Reset Defaults</button>
+            <button type="button" disabled={savingSettings || (activeSubTab === 'landing' && uploadingLandingImage)} onClick={saveSettings} className="rounded-md bg-blue-700 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-800 disabled:opacity-50">{savingSettings ? 'Saving…' : 'Save All Changes'}</button>
           </div>}
         </div>
         <nav aria-label="Settings sections" className="grid grid-cols-2 gap-1 lg:grid-cols-3">
@@ -1357,15 +1318,43 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
         </div>
       </section>}
 
-      {activeSubTab === 'landing' && <section className={panelStyle}>
-        <h2 className="font-bold text-blue-950">Public Landing Page Visibility</h2>
-        <div className="flex flex-wrap gap-4 text-sm">
-          {([
-            ['showBarangayDirectory', 'Barangay directory'],
-            ['showLegalRepository', 'Law repository section']
-          ] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2"><input type="checkbox" checked={settingsDraft[key]} onChange={(e) => changePreference(key, e.target.checked)} />{label}</label>)}
+      {activeSubTab === 'landing' && <section className={panelStyle} aria-label="Landing Page & Public Portal">
+        <div className="grid gap-3">
+          <label className="text-sm font-semibold text-slate-800">Hero Headline
+            <input className={inputStyle} value={landingForm.heroHeadline} onChange={(e) => setLandingForm((draft) => ({ ...draft, heroHeadline: e.target.value }))} />
+          </label>
+          <label className="text-sm font-semibold text-slate-800">Hero Subtext
+            <textarea rows={3} className={inputStyle} value={landingForm.heroDescription} onChange={(e) => setLandingForm((draft) => ({ ...draft, heroDescription: e.target.value }))} />
+          </label>
         </div>
-        <button type="button" className={actionStyle} onClick={() => { setActiveSubTab('media'); setSettingsActiveSubTab('media'); }}>Edit Background Showcase</button>
+        <fieldset className="border-t border-slate-100 pt-3">
+          <legend className="pr-2 text-sm font-semibold text-blue-950">Public Section Visibility</legend>
+          <div className="flex flex-wrap gap-4 text-sm">
+            {([
+              ['showBarangayDirectory', 'Barangay Directory'],
+              ['showLegalRepository', 'Law Repository']
+            ] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2"><input type="checkbox" checked={settingsDraft[key]} onChange={(e) => changePreference(key, e.target.checked)} />{label}</label>)}
+          </div>
+        </fieldset>
+        <div className="space-y-2 border-t border-slate-100 pt-3">
+          <label className="block text-sm font-semibold text-blue-950">Background Showcase Image
+            <input type="url" className={inputStyle} value={landingForm.heroBgImageUrl?.startsWith('data:') ? '' : landingForm.heroBgImageUrl || ''}
+              placeholder={landingForm.heroBgImageUrl?.startsWith('data:') ? 'Uploaded image' : 'Paste an image URL'}
+              onChange={(e) => setLandingForm((draft) => ({ ...draft, heroBgImageUrl: e.target.value }))} />
+          </label>
+          {landingForm.heroBgImageUrl && <img src={landingForm.heroBgImageUrl} alt="Background showcase preview" className="h-28 w-full max-w-sm rounded-md border border-slate-200 object-cover" />}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <span className="sr-only">Upload background showcase image</span>
+              <input type="file" accept="image/*" disabled={uploadingLandingImage} onChange={handleLandingImageUpload}
+                className="max-w-full text-xs file:mr-2 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-semibold file:text-blue-800" />
+            </label>
+            {uploadingLandingImage && <span role="status" className="text-xs text-slate-600">Loading image…</span>}
+            {landingForm.heroBgImageUrl && <button type="button" className={actionStyle} disabled={uploadingLandingImage}
+              onClick={() => setLandingForm((draft) => ({ ...draft, heroBgImageUrl: '' }))}>Remove Image</button>}
+          </div>
+        </div>
+        <button type="button" className={actionStyle} onClick={onManageBarangays}>Manage Barangay Sectors &amp; Zones →</button>
       </section>}
 
       {activeSubTab === 'gis' && <section className={panelStyle}>
@@ -1655,655 +1644,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigateToLanding 
               </form>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* ============================================================ */}
-      {/* SUB-TAB: LANDING PAGE CONTENT & PORTALS CUSTOMIZER           */}
-      {/* ============================================================ */}
-      {activeSubTab === 'landing' && (
-        <div className="space-y-6">
-          {/* Header Action Card */}
-          <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-start gap-3.5">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-800 text-white flex items-center justify-center shrink-0 shadow-md">
-                <Layout className="w-6 h-6 text-lime-300" />
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-md">
-                    Central Admin Customizer
-                  </span>
-                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    Live Synchronized
-                  </span>
-                </div>
-                <h3 className="font-serif font-black text-lg sm:text-xl text-slate-900">
-                  Landing Page Content &amp; Portals Customizer
-                </h3>
-                <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
-                  Configure all public landing page copy, announcement banners, hero headlines, role access cards, and add custom mandate/partnership cards.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              <button
-                type="button"
-                onClick={handleResetLandingPage}
-                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-rose-600 font-bold text-xs rounded-xl border border-slate-200 transition flex items-center gap-1.5 cursor-pointer"
-                title="Restore default landing page copy"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Reset Defaults</span>
-              </button>
-
-              {onNavigateToLanding && (
-                <button
-                  type="button"
-                  onClick={onNavigateToLanding}
-                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 hover:text-blue-700 font-bold text-xs rounded-xl border border-slate-200 transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Globe className="w-3.5 h-3.5 text-sky-600" />
-                  <span>View Landing Page</span>
-                  <ExternalLink className="w-3 h-3 text-slate-400" />
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => handleSaveLandingPage()}
-                className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer"
-              >
-                <Save className="w-4 h-4" />
-                <span>Save All Changes</span>
-              </button>
-            </div>
-          </div>
-
-          <form onSubmit={handleSaveLandingPage} className="space-y-6">
-            {/* CARD 1: Announcement Notice Bar & Hero Headlines */}
-            <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm space-y-6">
-              <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
-                <div className="p-2 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-200">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-sm text-slate-900">1. Hero Section: Background, Badges, Headline &amp; Narrative</h4>
-                  <p className="text-xs text-slate-500">Configure the hero banner background, top announcement banner, official badges, main headline, and action buttons.</p>
-                </div>
-              </div>
-
-              {/* Hero Showcase Background Customizer (Inside the Hero Box & Logo Card) */}
-              <HeroBackgroundEditor
-                heroBgColor={landingForm.heroBgColor}
-                heroBgImageUrl={landingForm.heroBgImageUrl}
-                heroBgOpacity={landingForm.heroBgOpacity}
-                heroBgBlur={landingForm.heroBgBlur}
-                heroBgOverlayOpacity={landingForm.heroBgOverlayOpacity}
-                heroCardBgColor={landingForm.heroCardBgColor}
-                heroCardBgImageUrl={landingForm.heroCardBgImageUrl}
-                heroCardBgOpacity={landingForm.heroCardBgOpacity}
-                heroCardBgBlur={landingForm.heroCardBgBlur}
-                heroCardBgOverlayOpacity={landingForm.heroCardBgOverlayOpacity}
-                heroLogoBackingColor={landingForm.heroLogoBackingColor}
-                heroCardTextTheme={landingForm.heroCardTextTheme}
-                heroHeadline={landingForm.heroHeadline}
-                onChange={(patch: HeroBgPatch) =>
-                  setLandingForm((prev) => ({ ...prev, ...patch }))
-                }
-                onSave={() => handleSaveLandingPage()}
-                saveLabel="Save Background & Landing"
-                onNotify={showToast}
-              />
-
-              {/* Badges & Headlines */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700">Official Municipal Badge (Top Left)</label>
-                  <input
-                    type="text"
-                    value={landingForm.heroBadge}
-                    onChange={(e) => setLandingForm({ ...landingForm, heroBadge: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
-                    placeholder="OFFICIAL MUNICIPAL RICE FARM REGISTRY · SILAGO"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700">PWA Offline Access Status Badge</label>
-                  <input
-                    type="text"
-                    value={landingForm.heroPwaBadge}
-                    onChange={(e) => setLandingForm({ ...landingForm, heroPwaBadge: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
-                    placeholder="100% Offline PWA Field Access Ready"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-700">Main Hero Headline</label>
-                <input
-                  type="text"
-                  value={landingForm.heroHeadline}
-                  onChange={(e) => setLandingForm({ ...landingForm, heroHeadline: e.target.value })}
-                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-serif font-black text-slate-900 focus:ring-2 focus:ring-emerald-500 outline-none"
-                  placeholder="A clearer view of every rice farm in Silago."
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-700">Hero Subtitle / Descriptive Paragraph</label>
-                <textarea
-                  rows={2}
-                  value={landingForm.heroDescription}
-                  onChange={(e) => setLandingForm({ ...landingForm, heroDescription: e.target.value })}
-                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-xs font-normal text-slate-700 leading-relaxed focus:ring-2 focus:ring-emerald-500 outline-none"
-                  placeholder="The Municipal Agriculture Office registry brings farmer records, georeferenced parcels, and field services together in one place."
-                />
-              </div>
-
-              {/* Action Buttons Labels */}
-              <div className="p-4 bg-slate-50/70 rounded-2xl border border-slate-200 space-y-3">
-                <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
-                  Hero Action Button Labels
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-600 text-[11px]">Return Button (Admin)</label>
-                    <input
-                      type="text"
-                      value={landingForm.heroReturnBtnText}
-                      onChange={(e) => setLandingForm({ ...landingForm, heroReturnBtnText: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="Return to Executive Dashboard"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-600 text-[11px]">Return Button (LFT)</label>
-                    <input
-                      type="text"
-                      value={landingForm.heroReturnLftBtnText}
-                      onChange={(e) => setLandingForm({ ...landingForm, heroReturnLftBtnText: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="Return to LFT Field Portal"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-600 text-[11px]">Sign In Button</label>
-                    <input
-                      type="text"
-                      value={landingForm.heroSignInBtnText}
-                      onChange={(e) => setLandingForm({ ...landingForm, heroSignInBtnText: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="Sign In as Central Admin"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* CARD 2: Live Statistics Registry Snapshot Labels */}
-            <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm space-y-4">
-              <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
-                <div className="p-2 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-200">
-                  <CheckCircle2 className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-sm text-slate-900">2. Live Registry Snapshot Labels</h4>
-                  <p className="text-xs text-slate-500">Configure metric labels and active cropping season displayed below the hero banner.</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Parcels Metric Label</label>
-                  <input
-                    type="text"
-                    value={landingForm.statLabelParcels}
-                    onChange={(e) => setLandingForm({ ...landingForm, statLabelParcels: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="TOTAL REGISTERED PARCELS"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Farmers Metric Label</label>
-                  <input
-                    type="text"
-                    value={landingForm.statLabelFarmers}
-                    onChange={(e) => setLandingForm({ ...landingForm, statLabelFarmers: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="REGISTERED FARMERS"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Barangays Metric Label</label>
-                  <input
-                    type="text"
-                    value={landingForm.statLabelBarangays}
-                    onChange={(e) => setLandingForm({ ...landingForm, statLabelBarangays: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="BARANGAYS WITH RECORDS"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* CARD 3: Coverage Section & LGU Operations Banner */}
-            <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm space-y-6">
-              <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
-                <div className="p-2 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-200">
-                  <Layers className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-sm text-slate-900">Barangay Sectors &amp; Public Coverage</h4>
-                  <p className="text-xs text-slate-500">Edit the public section headings, filter names, and barangay assignments.</p>
-                </div>
-              </div>
-
-              {/* Coverage section headers */}
-              <div className="space-y-4">
-                <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">
-                  Municipality Coverage Section Headings
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700">Section Tag</label>
-                    <input
-                      type="text"
-                      value={landingForm.coverageTag}
-                      onChange={(e) => setLandingForm({ ...landingForm, coverageTag: e.target.value })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="FULL MUNICIPALITY COVERAGE"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700">Section Title</label>
-                    <input
-                      type="text"
-                      value={landingForm.coverageTitle}
-                      onChange={(e) => setLandingForm({ ...landingForm, coverageTitle: e.target.value })}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="All 15 Barangays of Silago"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700">Subtext Description</label>
-                  <input
-                    type="text"
-                    value={landingForm.coverageDesc}
-                    onChange={(e) => setLandingForm({ ...landingForm, coverageDesc: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium text-slate-700"
-                    placeholder={DEFAULT_LANDING_PAGE_CONFIG.coverageDesc}
-                  />
-                </div>
-                {/* Filter Pills */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-600">Filter 1 Label (All)</label>
-                    <input
-                      type="text"
-                      value={landingForm.filterAllLabel}
-                      onChange={(e) => setLandingForm({ ...landingForm, filterAllLabel: e.target.value })}
-                      className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="All (15)"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-600">Filter 2 Label (Coastal)</label>
-                    <input
-                      type="text"
-                      value={landingForm.filterCoastalLabel}
-                      onChange={(e) => setLandingForm({ ...landingForm, filterCoastalLabel: e.target.value })}
-                      className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="Coastal Sectors"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-600">Filter 3 Label (Inland)</label>
-                    <input
-                      type="text"
-                      value={landingForm.filterInlandLabel}
-                      onChange={(e) => setLandingForm({ ...landingForm, filterInlandLabel: e.target.value })}
-                      className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="Inland & Irrigated"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <fieldset className="space-y-3 rounded-xl border border-blue-100 bg-slate-50 p-4" disabled={savingSettings}>
-                <legend className="px-1 text-sm font-semibold text-blue-950">Public Sector Assignments</legend>
-                <p className="text-xs text-slate-600">Select the public sector for each barangay. Save All Changes to publish the assignments.</p>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {OFFICIAL_15_BARANGAYS.map((name) => {
-                    const sector = sectorDraft[name] ?? getBarangayPublicSector(name, barangayProfiles);
-                    return (
-                      <fieldset key={name} className="flex flex-wrap gap-2 rounded-md border border-slate-200 bg-white px-3 pb-2 pt-1">
-                        <legend className="px-1 text-sm font-semibold text-slate-800">{getBarangayLabel(name, barangayProfiles)}</legend>
-                        {(['coastal', 'inland'] as const).map((option) => (
-                          <label key={option} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-slate-700 has-checked:bg-blue-50 has-checked:text-blue-900">
-                            <input type="radio" name={`public-sector-${name}`} checked={sector === option} className="accent-blue-700"
-                              onChange={() => setSectorDraft((draft) => ({ ...draft, [name]: option }))} />
-                            {getPublicSectorLabel(option, landingForm)}
-                          </label>
-                        ))}
-                      </fieldset>
-                    );
-                  })}
-                </div>
-              </fieldset>
-
-              {/* LGU Silago Field Operations CTA */}
-              <div className="p-4 bg-slate-50/70 rounded-2xl border border-slate-200 space-y-4">
-                <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">
-                  LGU Silago Field Operations CTA Banner
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700">Banner Tag</label>
-                    <input
-                      type="text"
-                      value={landingForm.lftBannerTag}
-                      onChange={(e) => setLandingForm({ ...landingForm, lftBannerTag: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="LGU SILAGO FIELD OPERATIONS"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700">Banner Title</label>
-                    <input
-                      type="text"
-                      value={landingForm.lftBannerTitle}
-                      onChange={(e) => setLandingForm({ ...landingForm, lftBannerTitle: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="Are you an assigned Local Farm Technician (LFT)?"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                  <div className="sm:col-span-8 space-y-1">
-                    <label className="text-xs font-bold text-slate-700">Banner Description</label>
-                    <input
-                      type="text"
-                      value={landingForm.lftBannerDesc}
-                      onChange={(e) => setLandingForm({ ...landingForm, lftBannerDesc: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-medium text-slate-800"
-                      placeholder="Log in to record today's parcel registrations, check irrigation buffers..."
-                    />
-                  </div>
-                  <div className="sm:col-span-4 space-y-1">
-                    <label className="text-xs font-bold text-slate-700">Banner Button Text</label>
-                    <input
-                      type="text"
-                      value={landingForm.lftBannerBtn}
-                      onChange={(e) => setLandingForm({ ...landingForm, lftBannerBtn: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                      placeholder="Sign In to Staff Portal →"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* CARD 5: Dynamic Mandate, Academic Partnership & Surveillance Zoning Cards (Add & Edit!) */}
-            <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-200">
-                    <Building className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-extrabold text-sm text-slate-900">
-                        5. Municipal Mandate, Academic Partnerships &amp; Zoning Cards
-                      </h4>
-                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                        {landingForm.mandateCards.length} Cards
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      Edit existing mandate and partnership cards, or add new informational cards dynamically.
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleAddLocalMandateCard}
-                  className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs rounded-xl border border-emerald-300 transition flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add New Card</span>
-                </button>
-              </div>
-
-              {/* Cards List */}
-              <div className="space-y-4">
-                {landingForm.mandateCards.map((card, idx) => (
-                  <div key={card.id} className="p-5 rounded-2xl border border-slate-200 bg-slate-50/60 space-y-3 relative group">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-xs font-bold">
-                          {idx + 1}
-                        </span>
-                        <span className="text-xs font-bold text-slate-700">
-                          {card.tag || `Mandate Card #${idx + 1}`}
-                        </span>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteLocalMandateCard(card.id)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                        title="Delete this card"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="text-[11px] font-bold text-slate-700">Card Tag (Upper Pill)</label>
-                        <input
-                          type="text"
-                          value={card.tag}
-                          onChange={(e) => handleUpdateLocalMandateCard(card.id, 'tag', e.target.value)}
-                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-emerald-800"
-                          placeholder="e.g. MUNICIPAL MANDATE"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[11px] font-bold text-slate-700">Card Title</label>
-                        <input
-                          type="text"
-                          value={card.title}
-                          onChange={(e) => handleUpdateLocalMandateCard(card.id, 'title', e.target.value)}
-                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-serif font-bold text-slate-900"
-                          placeholder="e.g. Rice Production & Sustainable Farm Security"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-bold text-slate-700">Card Description</label>
-                      <textarea
-                        rows={2}
-                        value={card.description}
-                        onChange={(e) => handleUpdateLocalMandateCard(card.id, 'description', e.target.value)}
-                        className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-normal text-slate-700 leading-relaxed"
-                        placeholder="Detailed description of initiatives..."
-                      />
-                    </div>
-                  </div>
-                ))}
-
-                {landingForm.mandateCards.length === 0 && (
-                  <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-2xl space-y-2">
-                    <p className="text-xs text-slate-500 font-medium">No mandate cards yet.</p>
-                    <button
-                      type="button"
-                      onClick={handleAddLocalMandateCard}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add First Mandate Card</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {landingForm.mandateCards.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleAddLocalMandateCard}
-                  className="w-full py-2.5 border-2 border-dashed border-emerald-300 hover:border-emerald-500 bg-emerald-50/50 hover:bg-emerald-50 text-emerald-800 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Add Another Mandate / Partnership Card</span>
-                </button>
-              )}
-            </div>
-
-            {/* CARD 6: Footer Contact & Legal Notice */}
-            <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200 shadow-sm space-y-5">
-              <div className="flex items-center gap-2.5 border-b border-slate-100 pb-3">
-                <div className="p-2 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-200">
-                  <Phone className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-sm text-slate-900">6. Footer Contact &amp; Public Disclaimer</h4>
-                  <p className="text-xs text-slate-500">Configure agriculture office name, physical address, quick links, and copyright text.</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700">Office Title</label>
-                  <input
-                    type="text"
-                    value={landingForm.footerOfficeName}
-                    onChange={(e) => setLandingForm({ ...landingForm, footerOfficeName: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="Silago DA Office"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700">Office Subtitle</label>
-                  <input
-                    type="text"
-                    value={landingForm.footerOfficeSubtitle}
-                    onChange={(e) => setLandingForm({ ...landingForm, footerOfficeSubtitle: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="MUNICIPAL AGRICULTURE"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-700">Physical Office Address</label>
-                <input
-                  type="text"
-                  value={landingForm.footerOfficeAddress}
-                  onChange={(e) => setLandingForm({ ...landingForm, footerOfficeAddress: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium text-slate-800"
-                  placeholder="Office of the Municipal Agriculturist, Silago Municipal Hall Complex, Southern Leyte, Philippines 6607."
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Quick Navigation Title</label>
-                  <input
-                    type="text"
-                    value={landingForm.footerNavTitle}
-                    onChange={(e) => setLandingForm({ ...landingForm, footerNavTitle: e.target.value })}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="QUICK NAVIGATION"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Link 1 Label</label>
-                  <input
-                    type="text"
-                    value={landingForm.footerNavAbout}
-                    onChange={(e) => setLandingForm({ ...landingForm, footerNavAbout: e.target.value })}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="About the Office"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Link 2 Label</label>
-                  <input
-                    type="text"
-                    value={landingForm.footerNavDirectory}
-                    onChange={(e) => setLandingForm({ ...landingForm, footerNavDirectory: e.target.value })}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="15 Barangays Directory"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                <div className="sm:col-span-4 space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Portal Access Title</label>
-                  <input
-                    type="text"
-                    value={landingForm.footerPortalAccessTitle}
-                    onChange={(e) => setLandingForm({ ...landingForm, footerPortalAccessTitle: e.target.value })}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-800"
-                    placeholder="PORTAL ACCESS"
-                  />
-                </div>
-                <div className="sm:col-span-8 space-y-1">
-                  <label className="text-[11px] font-bold text-slate-700">Portal Access Description</label>
-                  <input
-                    type="text"
-                    value={landingForm.footerPortalAccessDesc}
-                    onChange={(e) => setLandingForm({ ...landingForm, footerPortalAccessDesc: e.target.value })}
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-normal text-slate-700"
-                    placeholder="Restricted to authorized Municipal Agriculture Office staff..."
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-700">Copyright Line</label>
-                <input
-                  type="text"
-                  value={landingForm.footerCopyright}
-                  onChange={(e) => setLandingForm({ ...landingForm, footerCopyright: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-medium text-slate-800"
-                  placeholder="© 2026 Municipality of Silago · Office of the Municipal Agriculturist"
-                />
-              </div>
-            </div>
-
-            {/* Bottom Actions Bar */}
-            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex items-center justify-between flex-wrap gap-3">
-              <span className="text-xs text-slate-500 font-medium">
-                Changes will sync across devices and update the landing page immediately upon saving.
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleResetLandingPage}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 transition cursor-pointer"
-                >
-                  Reset Defaults
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer"
-                >
-                  <Save className="w-4 h-4" />
-                  <span>Save All Landing Page Changes</span>
-                </button>
-              </div>
-            </div>
-          </form>
         </div>
       )}
 

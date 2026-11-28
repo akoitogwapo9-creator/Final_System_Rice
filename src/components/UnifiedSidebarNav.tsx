@@ -69,7 +69,7 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
     {
       id: 'eartags',
       tab: 'eartags' as PortalTab,
-      label: 'Rice Records',
+      label: 'Rice Farm Records',
       icon: Wheat,
       badge: parcelsCount > 0 ? parcelsCount : undefined
     },
@@ -78,7 +78,7 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
           {
             id: 'subsidies',
             tab: 'subsidies' as PortalTab,
-            label: t('nav.subsidies', 'Seed & Fertilizer Claims'),
+            label: 'Crops & Seed Distribution',
             icon: Sprout,
           }
         ]
@@ -100,7 +100,7 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
           {
             id: 'barangays',
             tab: 'barangays' as PortalTab,
-            label: 'Manage Barangay',
+            label: 'Manage Barangay (15)',
             icon: Layers,
           }
         ]
@@ -108,7 +108,7 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
     {
       id: 'legal_decrees',
       tab: 'legal_decrees' as PortalTab,
-      label: 'Rice Legal Decrees',
+      label: 'Legal Decrees & Ordinances',
       icon: FileText,
     },
     ...(isAuthenticated
@@ -121,14 +121,14 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
           }
         ]
       : [])
-  ];
+  ].filter(item => isAuthenticated || !['eartags', 'reports'].includes(item.tab));
 
   // Admin section items (Settings placed last below User Accounts)
   const adminMenuItems = [
     {
       id: 'registry_form',
       tab: 'registry_form' as PortalTab,
-      label: 'Form Customization',
+      label: 'Registry Form Customization',
       icon: Sliders,
     },
     {
@@ -137,6 +137,7 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
       label: 'User Accounts',
       icon: Users,
     },
+    { id: 'audit', tab: 'audit' as PortalTab, label: 'Activity Audit Log', icon: ClipboardCheck },
     {
       id: 'settings',
       tab: 'settings' as PortalTab,
@@ -153,6 +154,13 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
   const filteredAdmin = adminMenuItems.filter(item =>
     !q || item.label.toLowerCase().includes(q)
   );
+
+  const menuGroups = [
+    { title: 'Operations & Fieldwork', tabs: ['dashboard', 'lft_dashboard', 'map', 'evaluation'] },
+    { title: 'Official Rice Registry', tabs: ['eartags', 'reports', 'legal_decrees'] },
+    { title: 'Programs & Distribution', tabs: ['subsidies'] },
+    { title: 'System Administration', tabs: ['barangays', 'account'] }
+  ];
 
   // Collapsed icon-rail mode
   if (isSidebarCollapsed) {
@@ -245,12 +253,15 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
         )}
       </div>
 
-      {/* Primary Navigation */}
-      <div className="space-y-0.5">
-        <div className="px-2.5 pb-1 text-[10px] font-semibold text-white/45 uppercase tracking-widest">
-          Registry &amp; Operations
-        </div>
-        {filteredPrimary.map((item) => {
+      {menuGroups.map(group => {
+        const items = filteredPrimary.filter(item => group.tabs.includes(item.tab));
+        if (isCentralAdmin && group.title === 'System Administration') items.push(...filteredAdmin);
+        if (!items.length) return null;
+        return <div key={group.title} className="space-y-0.5">
+          <div className="px-2.5 pb-1 text-[10px] font-semibold text-white/45 uppercase tracking-widest">
+            {group.title}
+          </div>
+          {items.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.tab;
           return (
@@ -260,7 +271,7 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
               onClick={() => onNavigateTab(item.tab)}
               className={`w-full flex items-center justify-between px-2.5 py-2 rounded text-xs transition cursor-pointer border-l-2 ${
                 isActive
-                  ? 'bg-white/12 text-white font-semibold border-gov-gold'
+                  ? 'bg-emerald-700 text-white font-semibold border-emerald-400'
                   : 'text-white/80 hover:text-white hover:bg-white/8 font-medium border-transparent'
               }`}
             >
@@ -280,39 +291,9 @@ export const UnifiedSidebarNav: React.FC<UnifiedSidebarNavProps> = ({
             </button>
           );
         })}
-      </div>
+      </div>;
+      })}
 
-      {/* System Administration */}
-      {isCentralAdmin && (
-        <div className="pt-2.5 border-t border-white/10">
-          <div className="px-2.5 py-1 text-[10px] font-semibold text-white/45 uppercase tracking-widest">
-            System Administration
-          </div>
-          <div className="space-y-0.5 mt-1">
-            {filteredAdmin.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.tab;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onNavigateTab(item.tab)}
-                  className={`w-full flex items-center justify-between px-2.5 py-2 rounded text-xs transition cursor-pointer border-l-2 ${
-                    isActive
-                      ? 'bg-white/12 text-white font-semibold border-gov-gold'
-                      : 'text-white/80 hover:text-white hover:bg-white/8 font-medium border-transparent'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-white/55'}`} />
-                    <span className="truncate">{item.label}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* Public Web Portal Link */}
       <div className="pt-2.5 border-t border-white/10">

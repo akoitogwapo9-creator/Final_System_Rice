@@ -9,41 +9,40 @@ export type OfficialBarangay = typeof OFFICIAL_15_BARANGAYS[number];
 export const BARANGAY_PARCEL_CODES: Record<OfficialBarangay, string> = {
   Balagawan: 'BLG',
   Catmon: 'CTM',
-  Calubian: 'CLB',
   Hingatungan: 'HNG',
   Imelda: 'IML',
   Katipunan: 'KTP',
-  Laguna: 'LGN',
+  Laguma: 'LGN',
   Mercedes: 'MRC',
   'Poblacion District 1': 'POB1',
   'Poblacion District 2': 'POB2',
   Puntana: 'PNT',
   Salvacion: 'SLV',
-  'San Isidro': 'SIS',
-  'San Roque': 'SRQ',
+  Sudmon: 'SDM',
+  'Tuba-on': 'TBN',
+  Tubod: 'TBD',
   'Sap-ang': 'SAP'
 };
 
-// Official Classification: 9 Coastal, 6 Upland
+// Default terrain groups for barangays with existing classifications.
 export const COASTAL_BARANGAYS: OfficialBarangay[] = [
   'Balagawan',
   'Hingatungan',
-  'Laguna',
+  'Laguma',
   'Mercedes',
   'Poblacion District 1',
   'Poblacion District 2',
   'Puntana',
-  'San Roque',
+  'Tuba-on',
   'Sap-ang'
 ];
 
 export const UPLAND_BARANGAYS: OfficialBarangay[] = [
-  'Calubian',
   'Catmon',
   'Imelda',
   'Katipunan',
-  'Salvacion',
-  'San Isidro'
+  'Tubod',
+  'Salvacion'
 ];
 
 export const BARANGAY_CLASSIFICATIONS = [
@@ -77,10 +76,6 @@ export function getBarangayPublicSector(name: string, profiles: BarangayProfiles
   return saved === 'coastal' || saved === 'inland' ? saved : getBarangayZone(name, profiles) === 'Coastal' ? 'coastal' : 'inland';
 }
 
-export function defaultBarangayPublicSector(name: string): PublicBarangaySector {
-  return COASTAL_BARANGAYS.some((barangay) => barangay === name) ? 'coastal' : 'inland';
-}
-
 export type BarangayProfiles = Record<string, {
   displayName: string;
   classification: BarangayClassification;
@@ -100,7 +95,7 @@ export function getBarangayZone(name: string, profiles?: BarangayProfiles): Bara
   if (UPLAND_BARANGAYS.some((b) => b.toLowerCase() === norm || norm.includes(b.toLowerCase()))) {
     return 'Upland';
   }
-  return 'Coastal';
+  return COASTAL_BARANGAYS.some(b => b.toLowerCase() === norm) ? 'Coastal' : 'Unclassified';
 }
 
 // Alias for compatibility across codebase
@@ -110,7 +105,7 @@ export type AssignedBarangay = typeof OFFICIAL_15_BARANGAYS[number];
 // Official 2 Assigned Local Farmer Technicians (LFTs)
 export const WELLA_ASSIGNED_BARANGAYS = [
   'Salvacion',
-  'Laguna',
+  'Laguma',
   'Poblacion District 2',
   'Poblacion District 1',
   'Sap-ang'
@@ -146,18 +141,18 @@ export function getAssignedLftForBarangay(_barangayName: string) {
 const OFFICIAL_BARANGAY_METADATA: Record<OfficialBarangay, { puroks: number; terrain: string; lat: number; lng: number }> = {
   'Balagawan': { puroks: 5, terrain: 'Coastal Plains', lat: 10.518, lng: 125.172 },
   'Catmon': { puroks: 4, terrain: 'River Basin Irrigated', lat: 10.525, lng: 125.158 },
-  'Calubian': { puroks: 4, terrain: 'Upland & River Basin', lat: 10.530, lng: 125.150 },
   'Hingatungan': { puroks: 6, terrain: 'Lowland Alluvial', lat: 10.562, lng: 125.168 },
   'Imelda': { puroks: 4, terrain: 'Upland Terrace', lat: 10.495, lng: 125.155 },
   'Katipunan': { puroks: 4, terrain: 'Upland Terrace', lat: 10.510, lng: 125.138 },
-  'Laguna': { puroks: 5, terrain: 'Lowland Alluvial', lat: 10.548, lng: 125.160 },
+  'Laguma': { puroks: 5, terrain: 'Lowland Alluvial', lat: 10.548, lng: 125.160 },
   'Mercedes': { puroks: 4, terrain: 'Lowland Alluvial', lat: 10.512, lng: 125.155 },
   'Poblacion District 1': { puroks: 5, terrain: 'River Basin Irrigated', lat: 10.5335, lng: 125.162 },
   'Poblacion District 2': { puroks: 4, terrain: 'River Basin Irrigated', lat: 10.5365, lng: 125.165 },
   'Puntana': { puroks: 4, terrain: 'Lowland Alluvial', lat: 10.555, lng: 125.152 },
   'Salvacion': { puroks: 4, terrain: 'Upland Terrace', lat: 10.528, lng: 125.148 },
-  'San Isidro': { puroks: 5, terrain: 'Lowland Alluvial', lat: 10.575, lng: 125.162 },
-  'San Roque': { puroks: 4, terrain: 'Lowland Alluvial & Coast', lat: 10.535, lng: 125.170 },
+  'Sudmon': { puroks: 0, terrain: 'Unclassified', lat: 10.5335, lng: 125.162 },
+  'Tuba-on': { puroks: 3, terrain: 'Coastal Plains', lat: 10.505, lng: 125.16 },
+  'Tubod': { puroks: 3, terrain: 'Upland Terrace', lat: 10.515, lng: 125.142 },
   'Sap-ang': { puroks: 4, terrain: 'Lowland Alluvial & Coastal', lat: 10.522, lng: 125.163 }
 };
 
@@ -205,7 +200,7 @@ export function matchBarangay(recordBarangay: string, targetBarangay: string): b
   const rec = recordBarangay.trim().toLowerCase();
   const tgt = targetBarangay.trim().toLowerCase();
 
-  if (rec === tgt) return true;
+  if (rec === tgt || getDisplayBarangay(recordBarangay).toLowerCase() === getDisplayBarangay(targetBarangay).toLowerCase()) return true;
 
   // Pd1 / Poblacion District 1 mapping
   if ((tgt === 'pd1' || tgt === 'poblacion district 1' || tgt === 'pob1' || tgt === 'poblacion 1') &&
@@ -265,9 +260,12 @@ export function getDisplayBarangay(name: string): string {
   const lower = clean.toLowerCase();
   if (lower === 'pd1' || lower.includes('poblacion district 1') || lower === 'pob1' || lower === 'poblacion 1' || lower === 'poblacion district i' || lower === 'pob. district i') return 'Poblacion District 1';
   if (lower === 'pd2' || lower.includes('poblacion district 2') || lower === 'pob2' || lower === 'poblacion 2' || lower === 'poblacion district ii' || lower === 'pob. district ii') return 'Poblacion District 2';
+  if (lower.replace(/[^a-z]/g, '') === 'tubaon') return 'Tuba-on';
+  if (lower === 'tubod') return 'Tubod';
+  if (lower === 'sudmon') return 'Sudmon';
   if (lower === 'sap-ang' || lower === 'sapang' || lower.includes('sap-ang')) return 'Sap-ang';
   if (lower.includes('salvacion')) return 'Salvacion';
-  if (lower === 'laguma' || lower.includes('laguna') || lower.includes('lagu')) return 'Laguna';
+  if (lower === 'laguma' || lower.includes('laguna') || lower.includes('lagu')) return 'Laguma';
   if (lower.includes('mercedes')) return 'Mercedes';
   if (lower.includes('katipunan')) return 'Katipunan';
   if (lower.includes('puntana')) return 'Puntana';

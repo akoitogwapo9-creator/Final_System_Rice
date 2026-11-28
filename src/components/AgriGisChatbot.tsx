@@ -1965,7 +1965,7 @@ export const AgriGisChatbot: React.FC<AgriGisChatbotProps> = ({
         brgy_dashboard: 'Barangay Overview',
         map: 'GIS Rice Map & Polygons',
         eartags: 'Rice Farm Records',
-        subsidies: 'Seed & Fertilizer Claims',
+        subsidies: 'Crops & Seed Distribution',
         reports: 'Print Official Reports & Masterlist',
         accounts: 'LFT Field Accounts',
         photos: 'Photo & Media Gallery',
@@ -1975,7 +1975,8 @@ export const AgriGisChatbot: React.FC<AgriGisChatbotProps> = ({
         barangays: 'Manage Barangays',
         gis_measure: 'Measure GIS Boundary',
         account: 'My Account',
-        registry_form: 'Form Customization'
+        registry_form: 'Form Customization',
+        audit: 'Activity Audit Log'
       };
       setLastNavNotice(`Switched to ${tabNames[action.tab] || action.tab}`);
     }

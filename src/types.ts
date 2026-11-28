@@ -49,6 +49,15 @@ export interface SeasonalProductionRecord {
 }
 
 export interface FarmParcel {
+  farmLabel?: string;
+  farmerGroupId?: string;
+  parcelVerificationStatus?: typeof import('./data/officeRegistry').VERIFICATION_STATUSES[number];
+  farmerVerificationStatus?: FarmParcel['parcelVerificationStatus'];
+  parcelVerifiedBy?: string;
+  parcelVerifiedAt?: string;
+  farmerVerifiedBy?: string;
+  farmerVerifiedAt?: string;
+  offlineBatchId?: string;
   tagNumber: string; // e.g. SLG-POB1-101
   swineNameOrId: string; // RSBSA reference number, e.g. RSBSA-08-64-15-001
   raiserName: string; // Farmer / Tiller Name
@@ -172,7 +181,7 @@ export const isAccountActive = (status?: string): boolean => {
 
 export type Language = 'EN' | 'CEB';
 
-export type PortalTab = 'dashboard' | 'lft_dashboard' | 'brgy_dashboard' | 'map' | 'gis_measure' | 'eartags' | 'subsidies' | 'reports' | 'accounts' | 'photos' | 'evaluation' | 'settings' | 'legal_decrees' | 'barangays' | 'account' | 'registry_form';
+export type PortalTab = 'dashboard' | 'lft_dashboard' | 'brgy_dashboard' | 'map' | 'gis_measure' | 'eartags' | 'subsidies' | 'reports' | 'accounts' | 'photos' | 'evaluation' | 'settings' | 'legal_decrees' | 'barangays' | 'account' | 'registry_form' | 'audit';
 
 export type SubsidyCategory = 'Seedlings / Seeds' | 'Fertilizer' | 'Farm Input Pack' | 'Cash / Voucher';
 

@@ -1,3 +1,4 @@
+import { OfficeSummaryReport } from '../components/OfficeSummaryReport';
 import { formatRegistryDate, readRegistryPreferences } from '../data/registryPreferences';
 import React, { useState, useMemo, useEffect } from 'react';
 import { DEFAULT_MUNICIPAL_BRANDING, useApp } from '../context/AppContext';
@@ -1258,6 +1259,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ initialBarangay }) => 
 
   return (
     <div className="space-y-5">
+      <OfficeSummaryReport />
       {/* Strict CSS Dynamic @page Orientation and Word Manuscript Print Rules */}
       <style dangerouslySetInnerHTML={{ __html: `
         @media print {

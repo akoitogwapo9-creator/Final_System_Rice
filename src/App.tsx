@@ -1,3 +1,5 @@
+import { OfficeDistributionView } from './views/OfficeDistributionView';
+import { OfficeAuditView } from './views/OfficeAuditView';
 import React, { useState, useEffect, useRef } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { LandingPage } from './components/LandingPage';
@@ -56,7 +58,7 @@ import {
   Shield
 } from 'lucide-react';
 
-const PUBLIC_PORTAL_TABS: PortalTab[] = ['eartags', 'reports', 'evaluation', 'legal_decrees', 'map'];
+const PUBLIC_PORTAL_TABS: PortalTab[] = ['evaluation', 'legal_decrees', 'map'];
 
 const AppContent: React.FC = () => {
   const {
@@ -120,6 +122,7 @@ const AppContent: React.FC = () => {
   const [selectedBarangay, setSelectedBarangay] = useState<Barangay | null>(null);
   const [isAddParcelOpen, setIsAddParcelOpen] = useState(false);
   const [editingParcel, setEditingParcel] = useState<FarmParcel | null>(null);
+  const [distributionView, setDistributionView] = useState<'inventory' | 'programs'>('inventory');
   const [isCropPlantingOpen, setIsCropPlantingOpen] = useState(false);
   const [cropTargetParcel, setCropTargetParcel] = useState<FarmParcel | null>(null);
   const [initialCoordsForAdd, setInitialCoordsForAdd] = useState<{
@@ -165,14 +168,14 @@ const AppContent: React.FC = () => {
         const tabParam = url.searchParams.get('tab');
         const routeTabs: Record<string, PortalTab> = {
           '/barangays': 'barangays', '/account': 'account',
-          '/admin/registry-form-customization': 'registry_form', '/admin/user-accounts': 'accounts',
+          '/admin/registry-form-customization': 'registry_form', '/admin/user-accounts': 'accounts', '/admin/activity': 'audit',
           '/gis-measure': 'gis_measure', '/subsidies': 'subsidies',
           '/map': 'map', '/dashboard': 'dashboard', '/lft_dashboard': 'lft_dashboard',
           '/brgy_dashboard': 'brgy_dashboard'
         };
         const routeTab = routeTabs[url.pathname.replace(/\/$/, '')];
         const sanitizeDeepLink = (target: PortalTab): PortalTab => {
-          if (currentUser && currentUser.role !== 'Central Admin' && ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure'].includes(target)) {
+          if (currentUser && currentUser.role !== 'Central Admin' && ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure', 'audit'].includes(target)) {
             return 'lft_dashboard';
           }
           return target;
@@ -188,13 +191,17 @@ const AppContent: React.FC = () => {
             setViewMode('portal');
           }
         } else if (url.pathname.replace(/\/$/, '') === '/certificate') {
-          setActiveTab('eartags');
-          setViewMode('portal');
-          setOpenCertificateOnLoad(true);
+          if (currentUser) {
+            setActiveTab('eartags');
+            setViewMode('portal');
+            setOpenCertificateOnLoad(true);
+          } else {
+            setIsLoginModalOpen(true);
+          }
         } else if (tabParam === 'evaluation') {
           setActiveTab('evaluation');
           setViewMode('portal');
-        } else if (tabParam && ['dashboard', 'lft_dashboard', 'brgy_dashboard', 'map', 'gis_measure', 'eartags', 'subsidies', 'reports', 'accounts', 'photos', 'settings', 'legal_decrees', 'barangays', 'account', 'registry_form'].includes(tabParam)) {
+        } else if (tabParam && ['dashboard', 'lft_dashboard', 'brgy_dashboard', 'map', 'gis_measure', 'eartags', 'subsidies', 'reports', 'accounts', 'photos', 'settings', 'legal_decrees', 'barangays', 'account', 'registry_form', 'audit'].includes(tabParam)) {
           if (!currentUser && !PUBLIC_PORTAL_TABS.includes(tabParam as PortalTab)) {
             setIsLoginModalOpen(true);
             setViewMode('landing');
@@ -243,7 +250,7 @@ const AppContent: React.FC = () => {
       return;
     }
     if (!isCentralAdmin) {
-      if (activeTab === 'dashboard' || activeTab === 'accounts' || activeTab === 'photos' || activeTab === 'registry_form' || activeTab === 'gis_measure') {
+      if (activeTab === 'dashboard' || activeTab === 'accounts' || activeTab === 'photos' || activeTab === 'registry_form' || activeTab === 'gis_measure' || activeTab === 'audit') {
         setActiveTab('lft_dashboard');
       }
     }
@@ -293,7 +300,7 @@ const AppContent: React.FC = () => {
     tab: PortalTab,
     subTab?: 'profile' | 'municipal' | 'featured_card' | 'display' | 'media' | 'landing'
   ) => {
-    const adminOnlyTabs: PortalTab[] = ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure'];
+    const adminOnlyTabs: PortalTab[] = ['dashboard', 'accounts', 'photos', 'registry_form', 'gis_measure', 'audit'];
     if (!currentUser && !PUBLIC_PORTAL_TABS.includes(tab)) {
       setIsLoginModalOpen(true);
       return;
@@ -324,13 +331,13 @@ const AppContent: React.FC = () => {
     setCropTargetParcel(null);
   }, [currentUser]);
 
-  const handleSaveParcel = async (parcel: FarmParcel) => {
+  const handleSaveParcel = async (parcel: FarmParcel, additionalParcels: FarmParcel[] = []) => {
     if (!currentUser) throw new Error('Sign in before saving a parcel.');
     if (editingParcel) {
       await updateParcel(parcel.tagNumber, parcel);
       setEditingParcel(null);
     } else {
-      await addParcel(parcel);
+      await addParcel(parcel, additionalParcels);
     }
   };
 
@@ -348,7 +355,7 @@ const AppContent: React.FC = () => {
       case 'eartags':
         return t('nav.database', 'Rice Farm Records Database');
       case 'subsidies':
-        return t('nav.subsidies', 'Seed & Fertilizer Claims');
+        return 'Crops & Seed Distribution';
       case 'reports':
         return t('nav.reports', 'Official Rice Farm Registry Reports');
       case 'accounts':
@@ -362,6 +369,7 @@ const AppContent: React.FC = () => {
       case 'legal_decrees': return 'Legal Decrees & Ordinances Management';
       case 'barangays': return 'Manage Silago Barangays';
       case 'account': return 'My Account & Profile Settings';
+      case 'audit': return 'Activity Audit Log';
       case 'registry_form': return 'Form Customization';
       default:
         return t('common.appTitle', 'Rice Farm Registry and Georeferencing');
@@ -969,7 +977,22 @@ const AppContent: React.FC = () => {
                 />
               )}
 
-              {activeTab === 'subsidies' && Boolean(currentUser) && <SubsidiesView />}
+              {activeTab === 'subsidies' && currentUser && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap gap-2" aria-label="Distribution sections">
+                    {(isCentralAdmin ? ['inventory', 'programs'] as const : ['inventory'] as const).map(view => <button key={view} type="button"
+                      aria-pressed={distributionView === view} onClick={() => setDistributionView(view)}
+                      className={`rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold ${distributionView === view ? 'bg-emerald-800 text-white' : 'bg-white text-slate-800'}`}>
+                      {view === 'inventory' ? 'Inventory & distribution log' : 'Subsidy programs'}
+                    </button>)}
+                  </div>
+                  {distributionView === 'inventory' || !isCentralAdmin ? <OfficeDistributionView key={currentUser.id || currentUser.username} onOpenCrops={() => {
+                    setCropTargetParcel(null);
+                    setIsCropPlantingOpen(true);
+                  }} /> : <SubsidiesView />}
+                </div>
+              )}
+              {activeTab === 'audit' && isCentralAdmin && <OfficeAuditView />}
 
               {activeTab === 'reports' && <ReportsView initialBarangay={reportBarangayFilter} />}
 
@@ -980,6 +1003,7 @@ const AppContent: React.FC = () => {
               {activeTab === 'settings' && isCentralAdmin && (
                 <SettingsView
                   onNavigateToLanding={() => setViewMode('landing')}
+                  onManageBarangays={() => handleNavigateToPortalTab('barangays')}
                 />
               )}
               {activeTab === 'settings' && !isCentralAdmin && (
@@ -1033,8 +1057,8 @@ const AppContent: React.FC = () => {
               setEditingParcel(p);
               setIsAddParcelOpen(true);
             } : undefined}
-            onDelete={permissions.canDeleteParcels ? (tag) => {
-              deleteParcel(tag);
+            onDelete={permissions.canDeleteParcels ? async (tag) => {
+              await deleteParcel(tag);
               setSelectedParcel(null);
             } : undefined}
           />
@@ -1061,11 +1085,7 @@ const AppContent: React.FC = () => {
           setInitialCoordsForAdd(null);
         }}
         onSave={handleSaveParcel}
-        onDelete={(tag) => {
-          deleteParcel(tag);
-          setIsAddParcelOpen(false);
-          setEditingParcel(null);
-        }}
+        onDelete={deleteParcel}
         editingParcel={editingParcel}
         initialCoords={initialCoordsForAdd}
         defaultBarangay={currentUser?.barangay}

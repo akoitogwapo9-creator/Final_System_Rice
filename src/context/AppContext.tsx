@@ -1,7 +1,9 @@
+import { distributionQueueKey, readDistributionQueue, syncDistributionQueue } from '../utils/officeDistribution';
+import { boundaryKey, farmerKey, farmLabel } from '../data/officeRegistry';
 import { RegistryPreferences, REGISTRY_PREFERENCES_KEY, normalizeRegistryPreferences, readRegistryPreferences } from '../data/registryPreferences';
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { User, FarmParcel, Language, BackgroundPreset, LftAccount, SeasonalProductionRecord, OfficeContactInfo, PortalTab, MunicipalBrandingSettings, LandingPageConfig, MandateCardItem, GovernmentSubsidyProgram, SubsidyCategory, SubsidyClaimRecord, SubsidyHistoryEntry, isAccountActive } from '../types';
-import { BARANGAYS, BARANGAY_CLASSIFICATIONS, BarangayProfiles, DEFAULT_COVERAGE_DESCRIPTION, getBarangayLabel, getBarangayZone, PublicBarangaySector, getAssignedLftForBarangay, isUserAuthorizedForBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
+import { BARANGAYS, BARANGAY_CLASSIFICATIONS, BarangayProfiles, DEFAULT_COVERAGE_DESCRIPTION, getAssignedLftForBarangay, isUserAuthorizedForBarangay, OFFICIAL_15_BARANGAYS } from '../data/barangays';
 import { DEFAULT_BG_PHOTO, DEFAULT_SLSU_PHOTO, SLSU_DEFAULTS, PRESET_BACKGROUNDS } from '../data/photos';
 import { DEFAULT_SUBSIDY_PROGRAMS } from '../data/subsidies';
 import { RiceVariety, RICE_VARIETIES, mergeRequiredRiceVarieties } from '../data/riceVarieties';
@@ -13,9 +15,9 @@ import {
   normalizeLftAccount,
   sortParcelsAlphabetically,
   supabaseDb,
-  getVerifiedCentralAdmin,
   broadcastRealtimeChange,
   getOfflinePendingFarms,
+  setRegistryQueueOwner,
   syncOfflinePendingFarms,
   checkDuplicateRsbsa,
   checkDuplicateFarmerName,
@@ -215,9 +217,9 @@ interface AppContextType {
   updateCurrentUserProfile: (profile: Partial<User>) => void;
   updateCurrentUserPassword: (currentPassword: string, newPassword: string) => Promise<string | null>;
   parcels: FarmParcel[];
-  addParcel: (parcel: FarmParcel) => Promise<void>;
+  addParcel: (parcel: FarmParcel, additionalParcels?: FarmParcel[]) => Promise<void>;
   updateParcel: (tagNumber: string, updated: Partial<FarmParcel>) => Promise<void>;
-  deleteParcel: (tagNumber: string) => void;
+  deleteParcel: (tagNumber: string) => Promise<void>;
   deleteBulkParcels: (tagNumbers: string[]) => Promise<void>;
   resetParcels: () => void;
   language: Language;
@@ -438,7 +440,6 @@ interface AppContextType {
   mapFarmerToParcel: (row: any) => FarmParcel;
 
   barangayProfiles: BarangayProfiles;
-  updatePublicBarangaySectors: (sectors: Record<string, PublicBarangaySector>) => Promise<boolean>;
   updateBarangayProfile: (name: string, profile: BarangayProfiles[string]) => Promise<boolean>;
 
   // User Session & Auth Loading State
@@ -622,24 +623,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     return flushBarangayProfiles();
   };
 
-  const updatePublicBarangaySectors = async (sectors: Record<string, PublicBarangaySector>) => {
-    if (currentUser?.role !== 'Central Admin') return false;
-    for (const name of OFFICIAL_15_BARANGAYS) {
-      const publicSector = sectors[name];
-      if (publicSector !== 'coastal' && publicSector !== 'inland') continue;
-      pendingBarangayProfiles.current[name] = {
-        displayName: getBarangayLabel(name, barangayProfiles),
-        classification: getBarangayZone(name, barangayProfiles),
-        ...barangayProfiles[name],
-        ...pendingBarangayProfiles.current[name],
-        publicSector
-      };
-    }
-    try { localStorage.setItem(PENDING_BARANGAY_PROFILES_KEY, JSON.stringify(pendingBarangayProfiles.current)); } catch {}
-    applyBarangayProfiles(barangayProfiles);
-    return flushBarangayProfiles();
-  };
-
   // Active Navigation Tab State (persisted per session in sessionStorage & URL state)
   const [activeTab, setActiveTabState] = useState<PortalTab>(() => {
     const publicSafeTabs: PortalTab[] = ['eartags', 'reports', 'evaluation', 'legal_decrees', 'map'];
@@ -683,8 +666,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
     const resolveAuthorizedSessionUser = async (accessToken: string): Promise<User | null> => {
       const { data: { user }, error } = await supabase.auth.getUser(accessToken);
       if (error || !user || user.is_anonymous) return null;
-      const verifiedAdmin = getVerifiedCentralAdmin(user);
-      const staff = verifiedAdmin || await supabaseDb.getStaffAccount();
+      const staff = await supabaseDb.getStaffAccount();
       if (!staff) {
         await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
         return null;
@@ -775,22 +757,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
   const [isRealtimeSyncing, setIsRealtimeSyncing] = useState<boolean>(false);
 
   // Farm Parcels Database State (Pure Async Remote Supabase Source of Truth + Cached Persistence + Alphabetical A-Z)
-  const [parcels, setParcels] = useState<FarmParcel[]>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const cached =
-          localStorage.getItem('rice_registry_parcels') ||
-          localStorage.getItem('silago_cached_parcels');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return sortParcelsAlphabetically(parsed.map(normalizeParcelNames));
-          }
-        }
-      }
-    } catch {}
-    return [];
-  });
+  const [parcels, setParcels] = useState<FarmParcel[]>([]);
+  const parcelOwner = currentUser ? `${currentUser.role}:${currentUser.id || currentUser.username}` : '';
+  const parcelCacheKey = parcelOwner ? `rice-registry-cache:${parcelOwner}` : '';
+  const activeParcelOwner = useRef(parcelOwner);
+  activeParcelOwner.current = parcelOwner;
+  const cacheParcels = useCallback((records: FarmParcel[]) => {
+    if (!parcelCacheKey || activeParcelOwner.current !== parcelOwner) return;
+    try { localStorage.setItem(parcelCacheKey, JSON.stringify(records)); } catch {}
+  }, [parcelCacheKey, parcelOwner]);
+
   const [isParcelsLoading, setIsParcelsLoading] = useState<boolean>(true);
 
   // LFT Accounts State (Pure Async Remote Supabase Source of Truth)
@@ -808,61 +784,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
 
   // Fetch Parcels: reads directly from 'farmers' table using supabase.from("farmers").select("*")
   const fetchParcels = useCallback(async () => {
+    if (!parcelOwner) {
+      setParcels([]);
+      setIsParcelsLoading(false);
+      return;
+    }
     setIsParcelsLoading(true);
     try {
-      const { data, error } = await supabase.from('farmers').select('*');
-
-      if (!error && Array.isArray(data)) {
-        const mapped: FarmParcel[] = (data as any[]).map(mapFarmerToParcel);
-        const pending = getOfflinePendingFarms();
-        const combined: FarmParcel[] = [...mapped];
-        pending.forEach((p) => {
-          const idx = combined.findIndex((c) => c.tagNumber === p.tagNumber);
-          if (idx >= 0) combined[idx] = p;
-          else combined.unshift(p);
-        });
-
-        const sorted = sortParcelsAlphabetically(combined);
-        setParcels(sorted);
-        try {
-          const serialized = JSON.stringify(sorted);
-          localStorage.setItem('silago_rice_parcels', serialized);
-          localStorage.setItem('rice_registry_parcels', serialized);
-          localStorage.setItem('silago_cached_parcels', serialized);
-        } catch {}
-      } else {
-        // Fallback to cached parcels if Supabase is offline or returned error
-        try {
-          const cached =
-            localStorage.getItem('silago_rice_parcels') ||
-            localStorage.getItem('rice_registry_parcels') ||
-            localStorage.getItem('silago_cached_parcels');
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              setParcels(sortParcelsAlphabetically(parsed.map(normalizeParcelNames)));
-            }
-          }
-        } catch {}
+      const mapped: FarmParcel[] = [];
+      const size = 500;
+      for (let offset = 0; ; offset += size) {
+        const { data, error } = await supabase.from('farmers').select('*').order('id').range(offset, offset + size - 1);
+        if (error) throw error;
+        mapped.push(...data.map(mapFarmerToParcel));
+        if (data.length < size) break;
       }
-    } catch (err) {
-      console.warn('fetchParcels notice / offline fallback:', err);
+      if (activeParcelOwner.current !== parcelOwner) return;
+      const indexed = new Map(mapped.map(parcel => [parcel.tagNumber, parcel]));
+      for (const pending of getOfflinePendingFarms()) indexed.set(pending.tagNumber, pending);
+      const sorted = sortParcelsAlphabetically([...indexed.values()]);
+      setParcels(sorted);
+      cacheParcels(sorted);
+    } catch (error) {
+      if (activeParcelOwner.current !== parcelOwner) return;
+      console.warn('Registry fetch used the staff cache:', error);
       try {
-        const cached =
-          localStorage.getItem('silago_rice_parcels') ||
-          localStorage.getItem('rice_registry_parcels') ||
-          localStorage.getItem('silago_cached_parcels');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setParcels(sortParcelsAlphabetically(parsed.map(normalizeParcelNames)));
-          }
+        const snapshot = JSON.parse(localStorage.getItem(parcelCacheKey) || '[]');
+        const indexed = new Map<string, FarmParcel>();
+        if (Array.isArray(snapshot)) {
+          for (const parcel of snapshot) indexed.set(parcel.tagNumber, normalizeParcelNames(parcel));
         }
-      } catch {}
+        for (const pending of getOfflinePendingFarms()) indexed.set(pending.tagNumber, pending);
+        setParcels(sortParcelsAlphabetically([...indexed.values()]));
+      } catch {
+        setParcels(getOfflinePendingFarms());
+      }
     } finally {
-      setIsParcelsLoading(false);
+      if (activeParcelOwner.current === parcelOwner) setIsParcelsLoading(false);
     }
-  }, [mapFarmerToParcel]);
+  }, [parcelOwner, parcelCacheKey, mapFarmerToParcel, cacheParcels]);
+
+  useEffect(() => {
+    setParcels([]);
+    setRegistryQueueOwner(parcelOwner);
+    setOfflineQueueCount(getOfflinePendingFarms().length);
+    // Remove unscoped caches from the older public registry.
+    for (const key of ['silago_rice_parcels', 'rice_registry_parcels', 'silago_cached_parcels']) {
+      try { localStorage.removeItem(key); } catch {}
+    }
+  }, [parcelOwner]);
 
   useEffect(() => {
     let active = true;
@@ -906,9 +876,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       setTimeout(() => setSyncNotification(null), 4000);
       return;
     }
+    const distributionKey = distributionQueueKey(currentUser);
+    const syncDistribution = async () => {
+      if (!readDistributionQueue(distributionKey).length) return;
+      const failure = await syncDistributionQueue(distributionKey);
+      if (failure) setSyncNotification(`Distribution sync: ${failure}`);
+    };
     const currentQueue = getOfflinePendingFarms();
     if (currentQueue.length === 0) {
       setOfflineQueueCount(0);
+      await syncDistribution();
       return;
     }
 
@@ -925,11 +902,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       }
 
       if (conflictCount > 0) {
-        setSyncNotification(`Sync notice: ${conflictCount} record${conflictCount > 1 ? 's' : ''} had RSBSA conflict. Please review.`);
+        setSyncNotification(`Sync notice: ${conflictCount} record${conflictCount > 1 ? 's' : ''} could not sync. Review the pending parcel entries.`);
         setTimeout(() => setSyncNotification(null), 6000);
       }
     } catch (err) {
       console.warn('Sync offline queue notice:', err);
+    } finally {
+      await syncDistribution();
     }
   }, [syncWithSupabase, currentUser]);
 
@@ -954,8 +933,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       // If online and there are pending offline records on mount, trigger sync
       if (typeof navigator !== 'undefined' && navigator.onLine) {
         const pending = getOfflinePendingFarms();
-        if (pending.length > 0) {
-          syncOfflineQueue();
+        if (pending.length > 0 || readDistributionQueue(distributionQueueKey(currentUser)).length > 0) {
+          void syncOfflineQueue();
         }
       }
     }
@@ -1086,85 +1065,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         'postgres_changes',
         { event: '*', schema: 'public', table: 'farmers' },
         (payload) => {
-          if (!isMounted) return;
-          if (payload.eventType === 'INSERT') {
-            if (!payload.new) return;
-            const incoming = mapFarmerToParcel(payload.new);
-            setParcels((prev) => {
-              const index = prev.findIndex(
-                (p) =>
-                  p.tagNumber === incoming.tagNumber ||
-                  (incoming.swineNameOrId &&
-                    incoming.swineNameOrId !== 'NO RSBSA' &&
-                    p.swineNameOrId &&
-                    p.swineNameOrId.trim().toLowerCase() === incoming.swineNameOrId.trim().toLowerCase())
-              );
-              let updated: FarmParcel[];
-              if (index >= 0) {
-                updated = [...prev];
-                updated[index] = { ...updated[index], ...incoming };
-              } else {
-                updated = [incoming, ...prev];
-              }
-              const sorted = sortParcelsAlphabetically(updated);
-              try {
-                localStorage.setItem('rice_registry_parcels', JSON.stringify(sorted));
-                localStorage.setItem('silago_cached_parcels', JSON.stringify(sorted));
-              } catch {}
-              return sorted;
-            });
-          } else if (payload.eventType === 'UPDATE') {
-            if (!payload.new) return;
-            const incoming = mapFarmerToParcel(payload.new);
-            setParcels((prev) => {
-              const index = prev.findIndex(
-                (p) =>
-                  p.tagNumber === incoming.tagNumber ||
-                  (incoming.swineNameOrId &&
-                    incoming.swineNameOrId !== 'NO RSBSA' &&
-                    p.swineNameOrId &&
-                    p.swineNameOrId.trim().toLowerCase() === incoming.swineNameOrId.trim().toLowerCase())
-              );
-              let updated: FarmParcel[];
-              if (index >= 0) {
-                updated = [...prev];
-                updated[index] = { ...updated[index], ...incoming };
-              } else {
-                updated = [incoming, ...prev];
-              }
-              const sorted = sortParcelsAlphabetically(updated);
-              try {
-                localStorage.setItem('rice_registry_parcels', JSON.stringify(sorted));
-                localStorage.setItem('silago_cached_parcels', JSON.stringify(sorted));
-              } catch {}
-              return sorted;
-            });
-          } else if (payload.eventType === 'DELETE') {
-            const old = payload.old as any;
-            const oldTag = old?.id || old?.tagNumber || old?.tag_number || old?.parcel_tag;
-            const oldRsbsa = old?.rsbsa_number || old?.rsbsa_no;
-            const oldName = old?.farmer_name || old?.farmerName;
-
-            setParcels((prev) => {
-              const filtered = prev.filter((p) => {
-                if (oldTag && (p.tagNumber === oldTag || (p as any).id === oldTag || p.tagNumber === `FARMER-${oldTag}`)) {
-                  return false;
-                }
-                if (oldRsbsa && p.swineNameOrId && p.swineNameOrId.trim().toLowerCase() === String(oldRsbsa).trim().toLowerCase()) {
-                  return false;
-                }
-                if (oldName && p.raiserName && p.raiserName.trim().toLowerCase() === String(oldName).trim().toLowerCase()) {
-                  return false;
-                }
-                return true;
-              });
-              try {
-                localStorage.setItem('rice_registry_parcels', JSON.stringify(filtered));
-                localStorage.setItem('silago_cached_parcels', JSON.stringify(filtered));
-              } catch {}
-              return filtered;
-            });
-          }
+          if (!isMounted || !parcelOwner || activeParcelOwner.current !== parcelOwner) return;
+          const id = String(payload.eventType === 'DELETE' ? payload.old?.id || '' : payload.new?.id || '');
+          if (!id || getOfflinePendingFarms().some(parcel => parcel.tagNumber === id)) return;
+          setParcels(previous => {
+            const updated = previous.filter(parcel => parcel.tagNumber !== id);
+            if (payload.eventType !== 'DELETE') updated.push(mapFarmerToParcel(payload.new));
+            const sorted = sortParcelsAlphabetically(updated);
+            cacheParcels(sorted);
+            return sorted;
+          });
         }
       )
       // --- 'lft_technicians' table: INSERT, UPDATE, and DELETE events ---
@@ -1272,101 +1182,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
       isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, [syncWithSupabase, handleSettingUpsert, handleSettingDelete]);
+  }, [syncWithSupabase, handleSettingUpsert, handleSettingDelete, cacheParcels, parcelOwner, mapFarmerToParcel]);
 
   // Active Cropping Season (LFT Twice-a-Year Rice Production)
 
-  const addParcel = async (parcel: FarmParcel) => {
-    if (!canUserAddParcel(currentUser, parcel.barangay)) {
-      throw new Error('Unauthorized: You do not have permission to register rice farm parcels in this barangay.');
-    }
-    // 1. Enforce numeric-only contact number (strip non-digits, accept 11-digit mobile 09XXXXXXXXX)
-    let sanitizedContact = (parcel.contactNumber || '').trim();
-    if (sanitizedContact) {
-      const digits = sanitizedContact.replace(/\D/g, '');
-      if (digits.length === 11 && digits.startsWith('09')) {
-        sanitizedContact = digits;
-      } else if (digits.length > 0) {
-        throw new Error('Validation Error: Contact number must be an 11-digit mobile number starting with 09 (e.g. 09XXXXXXXXX).');
+  const addParcel = async (parcel: FarmParcel, additionalParcels: FarmParcel[] = []) => {
+    const pending = [parcel, ...additionalParcels];
+    const known = [...parcels];
+    const validated = pending.map(item => {
+      if (!canUserAddParcel(currentUser, item.barangay)) {
+        throw new Error(`You do not have permission to register parcels in ${item.barangay}.`);
       }
-    }
-
-    // 2. Validate existing RSBSA number duplicate prevention
-    const cleanRsbsa = (parcel.swineNameOrId || parcel.rsbsa_no || '').trim();
-    if (cleanRsbsa && cleanRsbsa.toUpperCase() !== 'NO RSBSA') {
-      const existingRsbsa = parcels.find(
-        (p) =>
-          p.tagNumber !== parcel.tagNumber &&
-          (p.swineNameOrId || p.rsbsa_no || '').trim().toLowerCase() === cleanRsbsa.toLowerCase()
-      );
-      if (existingRsbsa) {
-        throw new Error(`Duplicate RSBSA: A farmer with RSBSA No. "${cleanRsbsa}" is already registered (${existingRsbsa.raiserName || 'Existing Record'}).`);
+      const contactNumber = (item.contactNumber || '').replace(/\D/g, '');
+      if (contactNumber && !/^09\d{9}$/.test(contactNumber)) {
+        throw new Error('Contact number must be an 11-digit mobile number starting with 09.');
       }
-    }
-
-    // 3. Validate existing Full Name duplicate prevention
-    const normalizeName = (s: string) => s.toLowerCase().trim().replace(/[,.-]/g, ' ').replace(/\s+/g, ' ');
-    const parcelName = normalizeName(
-      [parcel.farmerGivenName, parcel.farmerMiddleName, parcel.farmerFamilyName].filter(Boolean).join(' ') ||
-      parcel.raiserName ||
-      ''
-    );
-
-    if (parcelName.length >= 3) {
-      const existingName = parcels.find((p) => {
-        if (p.tagNumber === parcel.tagNumber) return false;
-        const pName = normalizeName(
-          [p.farmerGivenName, p.farmerMiddleName, p.farmerFamilyName].filter(Boolean).join(' ') ||
-          p.raiserName ||
-          ''
-        );
-        const pBrgy = (p.barangay || '').trim().toLowerCase();
-        const targetBrgy = (parcel.barangay || '').trim().toLowerCase();
-        return pName === parcelName && (!pBrgy || !targetBrgy || pBrgy === targetBrgy);
-      });
-
-      if (existingName) {
-        throw new Error(`Duplicate Farmer Name: A farmer named "${parcel.raiserName || parcelName}" is already registered in Barangay ${parcel.barangay || 'the system'}.`);
+      const boundary = boundaryKey(item.boundaryCoords);
+      if (known.some(existing => existing.tagNumber === item.tagNumber ||
+          (farmerKey(existing) === farmerKey(item) && farmLabel(existing) === farmLabel(item)) ||
+          (boundary && boundaryKey(existing.boundaryCoords) === boundary))) {
+        throw new Error(`${farmLabel(item)} duplicates an existing parcel label or GIS boundary.`);
       }
-    }
-
-    const formattedTag = parcel.tagNumber?.trim() || `${registryPreferences.parcelPrefix}-${Date.now().toString(36).toUpperCase()}`;
-
-    const validatedParcel = normalizeParcelNames({ ...parcel, tagNumber: formattedTag, contactNumber: sanitizedContact });
-
-    // Optimistically update local parcels state and cached storage immediately
-    setParcels((prev) => {
-      const updated = sortParcelsAlphabetically([validatedParcel, ...prev.filter((p) => p.tagNumber !== validatedParcel.tagNumber)]);
-      try {
-        localStorage.setItem('rice_registry_parcels', JSON.stringify(updated));
-        localStorage.setItem('silago_cached_parcels', JSON.stringify(updated));
-      } catch {}
-      return updated;
+      known.push(item);
+      return normalizeParcelNames({ ...item, contactNumber });
     });
 
     try {
-      // Direct Remote Supabase CRUD & Realtime Broadcast - throws on duplicate constraint / 23505
-      await supabaseDb.upsertParcel(validatedParcel);
-    } catch (err: any) {
-      const isUniqueViolation =
-        err?.code === '23505' ||
-        err?.message?.includes('23505') ||
-        err?.message?.toLowerCase().includes('unique') ||
-        err?.message?.toLowerCase().includes('duplicate key');
-
-      if (isUniqueViolation) {
-        // Rollback state and cache if unique constraint error occurred
-        setParcels((prev) => {
-          const reverted = prev.filter((p) => p.tagNumber !== validatedParcel.tagNumber);
-          try {
-            localStorage.setItem('rice_registry_parcels', JSON.stringify(reverted));
-            localStorage.setItem('silago_cached_parcels', JSON.stringify(reverted));
-          } catch {}
-          return reverted;
-        });
-        throw err;
-      }
-      console.warn('Supabase remote sync notice:', err?.message || err);
+      const saved = await supabaseDb.upsertParcels(validated);
+      if (activeParcelOwner.current !== parcelOwner) return;
+      setParcels(previous => {
+        const ids = new Set(saved.map(item => item.tagNumber));
+        const updated = sortParcelsAlphabetically([...saved, ...previous.filter(item => !ids.has(item.tagNumber))]);
+        cacheParcels(updated);
+        return updated;
+      });
     } finally {
       setOfflineQueueCount(getOfflinePendingFarms().length);
     }
@@ -1382,60 +1231,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         throw new Error('Unauthorized: You do not have permission to modify this farm parcel record.');
       }
       const targetUpdated = normalizeParcelNames({ ...existing, ...updatedFields });
-      setParcels((prev) => {
-        const updated = prev.map((p) => (p.tagNumber === tagNumber ? targetUpdated : p));
-        try {
-          localStorage.setItem('rice_registry_parcels', JSON.stringify(updated));
-          localStorage.setItem('silago_cached_parcels', JSON.stringify(updated));
-        } catch {}
-        return updated;
-      });
       try {
-        await supabaseDb.upsertParcel(targetUpdated);
-      } catch (err: any) {
-        console.warn('Supabase parcel update notice:', err?.message || err);
+        const [saved] = await supabaseDb.upsertParcels([targetUpdated]);
+        if (activeParcelOwner.current !== parcelOwner) return;
+        setParcels(previous => {
+          const updated = previous.map(parcel => parcel.tagNumber === tagNumber ? saved : parcel);
+          cacheParcels(updated);
+          return updated;
+        });
       } finally {
         setOfflineQueueCount(getOfflinePendingFarms().length);
       }
+    } else {
+      throw new Error('Farm parcel could not be found.');
     }
-  };
-
-  const deleteParcel = (tagNumber: string) => {
-    if (!canUserDeleteParcel(currentUser)) return;
-    setParcels((prev) => {
-      const filtered = prev.filter((p) => p.tagNumber !== tagNumber);
-      try {
-        localStorage.setItem('rice_registry_parcels', JSON.stringify(filtered));
-        localStorage.setItem('silago_cached_parcels', JSON.stringify(filtered));
-      } catch {}
-      return filtered;
-    });
-    supabaseDb.deleteParcel(tagNumber).then(() => {
-      setOfflineQueueCount(getOfflinePendingFarms().length);
-    }).catch((err) => {
-      console.warn('Supabase parcel deletion notice:', err?.message || err);
-    });
   };
 
   const deleteBulkParcels = async (tagNumbers: string[]) => {
-    if (!canUserDeleteParcel(currentUser)) return;
-    if (!tagNumbers || tagNumbers.length === 0) return;
-    setParcels((prev) => {
-      const filtered = prev.filter((p) => !tagNumbers.includes(p.tagNumber));
-      try {
-        localStorage.setItem('rice_registry_parcels', JSON.stringify(filtered));
-        localStorage.setItem('silago_cached_parcels', JSON.stringify(filtered));
-      } catch {}
+    if (!canUserDeleteParcel(currentUser)) throw new Error('Only the MAO administrator can delete farm parcels.');
+    if (!tagNumbers.length) return;
+    await supabaseDb.deleteBulkFarmRecords(tagNumbers);
+    if (activeParcelOwner.current !== parcelOwner) return;
+    const deleted = new Set(tagNumbers);
+    setParcels(previous => {
+      const filtered = previous.filter(parcel => !deleted.has(parcel.tagNumber));
+      cacheParcels(filtered);
       return filtered;
     });
-    try {
-      await supabaseDb.deleteBulkFarmRecords(tagNumbers);
-    } catch (err: any) {
-      console.warn('Supabase bulk deletion notice:', err?.message || err);
-    } finally {
-      setOfflineQueueCount(getOfflinePendingFarms().length);
-    }
+    setOfflineQueueCount(getOfflinePendingFarms().length);
   };
+
+  const deleteParcel = (tagNumber: string) => deleteBulkParcels([tagNumber]);
 
   const resetParcels = () => {
     if (currentUser?.role !== 'Central Admin') return;
@@ -2762,7 +2588,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode; syncPortalNaviga
         currentUser,
         barangayProfiles,
         updateBarangayProfile,
-        updatePublicBarangaySectors,
         setCurrentUser,
         updateCurrentUserProfile,
         updateCurrentUserPassword,

@@ -1,3 +1,5 @@
+import { OfficeRegistryVerification } from './OfficeRegistryVerification';
+import { boundaryKey, farmerKey, farmLabel, groupFarmerParcels, isRsbsaReference, rsbsaReference } from '../data/officeRegistry';
 import React, { useState, useEffect, useId, useMemo, useRef } from 'react';
 import { FarmParcel } from '../types';
 import {
@@ -15,7 +17,7 @@ import {
 import { RegistrationLocationMap } from './RegistrationLocationMap';
 import { SafeImage } from './SafeImage';
 import { useApp } from '../context/AppContext';
-import { uploadFarmPhoto, supabaseClient, parseFarmerName, checkDuplicateRsbsa, checkDuplicateFarmerName, withTimeout } from '../utils/supabaseClient';
+import { uploadFarmPhoto, supabaseClient, parseFarmerName, checkDuplicateRsbsa, checkDuplicateFarmerName } from '../utils/supabaseClient';
 import {
   getParcelCustomFields,
   saveParcelCustomFields,
@@ -64,7 +66,7 @@ const REGISTRATION_STEPS: Array<{
 interface AddParcelModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (parcel: FarmParcel) => Promise<void> | void;
+  onSave: (parcel: FarmParcel, additionalParcels?: FarmParcel[]) => Promise<void> | void;
   editingParcel?: FarmParcel | null;
   initialCoords?: {
     lat: number;
@@ -74,7 +76,7 @@ interface AddParcelModalProps {
     barangay?: string;
   } | null;
   defaultBarangay?: string;
-  onDelete?: (tagNumber: string) => void;
+  onDelete?: (tagNumber: string) => Promise<void> | void;
 }
 
 export const AddParcelModal: React.FC<AddParcelModalProps> = ({
@@ -93,6 +95,27 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     registryPreferences,
     parcels
   } = useApp();
+
+  const [linkedTag, setLinkedTag] = useState('');
+  const [extraParcels, setExtraParcels] = useState<Array<{
+    id: string; barangay: string; purok: string; area: string; ecosystem: string;
+    lat?: number; lng?: number; boundary?: [number, number][];
+  }>>([]);
+  const linkedFarmer = parcels.find((parcel) => parcel.tagNumber === linkedTag);
+  useEffect(() => {
+    if (isOpen) {
+      setLinkedTag('');
+      setExtraParcels([]);
+    }
+  }, [isOpen, editingParcel]);
+  const usedLabels = new Set(linkedFarmer ? parcels.filter(p => farmerKey(p) === farmerKey(linkedFarmer)).map(farmLabel) : []);
+  const nextFarmLabels = Array.from({ length: extraParcels.length + 1 }, () => {
+    let number = 1;
+    while (usedLabels.has(`Farm ${number}`)) number++;
+    const label = `Farm ${number}`;
+    usedLabels.add(label);
+    return label;
+  });
 
   const parcelPrefix = registryPreferences.parcelPrefix;
 
@@ -289,6 +312,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
   // 1. Real-time Duplicate Check for RSBSA Number (both local state and Supabase query)
   useEffect(() => {
     const inputRsbsa = (formData.swineNameOrId || '').trim();
+    if (linkedTag || editingParcel) { setDuplicateRsbsaMatch(null); return; }
     if (!inputRsbsa || inputRsbsa.toUpperCase() === 'NO RSBSA') {
       setDuplicateRsbsaMatch(null);
       setIsCheckingRsbsa(false);
@@ -345,10 +369,11 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       isCancelled = true;
       clearTimeout(timer);
     };
-  }, [formData.swineNameOrId, parcels, editingParcel]);
+  }, [linkedTag, formData.swineNameOrId, parcels, editingParcel]);
 
   // 2. Strict Real-Time Duplicate Farmer Name Checking & Normalization
   useEffect(() => {
+    if (linkedTag || editingParcel) { setDuplicateNameMatch(null); return; }
     const fam = (formData.farmerFamilyName || '').trim();
     const giv = (formData.farmerGivenName || '').trim();
     const mid = (formData.farmerMiddleName || '').trim();
@@ -507,7 +532,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     formData.swineNameOrId,
     parcels,
     editingParcel,
-    effectiveDefaultBarangay
+    effectiveDefaultBarangay, linkedTag
   ]);
 
   // Keep Full Name synchronized cleanly without leaving trailing commas
@@ -609,6 +634,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     const targetBrgy = formData.barangay || effectiveDefaultBarangay;
 
     if (step === 1) {
+      const reference = rsbsaReference(linkedFarmer?.swineNameOrId ?? formData.swineNameOrId);
+      if (!editingParcel && !linkedFarmer && reference && reference !== 'NO RSBSA' && !isRsbsaReference(reference)) {
+        return 'Enter the RSBSA reference in 00-00-00-000-000000 format.';
+      }
       if (
         formSchema.isVisible('reg-family-name') &&
         formSchema.isRequired('reg-family-name') &&
@@ -688,6 +717,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     }
 
     if (step === 2) {
+      if (!editingParcel && (!formData.purok?.trim() || !formData.purpose ||
+          new Set((formData.boundaryCoords || []).map(point => point.join(','))).size < 3)) {
+        return `${nextFarmLabels[0]} requires a sitio, ecosystem, and at least three distinct boundary vertices.`;
+      }
       if (!isUserAuthorizedForBarangay(currentUser, targetBrgy)) {
         return `Validation Error: As an assigned LFT (${currentUser?.name}), you are restricted to registering or managing farm parcels in your assigned barangays: ${assignedBarangays?.join(', ')}. Barangay "${targetBrgy}" is outside your jurisdiction.`;
       }
@@ -793,6 +826,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
     const finalParcel: FarmParcel = {
       ...editingParcel,
+      farmLabel: editingParcel ? farmLabel(editingParcel) : nextFarmLabels[0],
       tagNumber: formattedTag,
       swineNameOrId: formData.swineNameOrId || 'NO RSBSA',
       rsbsa_no: formData.swineNameOrId || 'NO RSBSA',
@@ -804,10 +838,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
       farmLocation: formData.farmLocation || targetBrgy.toUpperCase(),
       raiserName: finalRaiserName.toUpperCase(),
       barangay: targetBrgy,
-      purok: formData.purok || 'Purok Riverside',
+      purok: formData.purok || '',
       address: formData.residential_address || formData.address || `${targetBrgy}, Silago, Southern Leyte`,
       residential_address: formData.residential_address || formData.address || `${targetBrgy}, Silago, Southern Leyte`,
-      contactNumber: cleanContact || '09170000000',
+      contactNumber: cleanContact,
       breed: formData.breed || '',
       sex: formData.sex || '',
       ageMonths: Number(formData.ageMonths) || 0,
@@ -821,6 +855,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
           ? 'Medium Farm (2-5 ha)'
           : 'Commercial (>5 ha)',
       purpose: formData.purpose || '',
+      ecosystem: formData.purpose || '',
       vaccinationStatus: formData.vaccinationStatus || 'RSBSA Enrolled & PCIC Insured',
       healthStatus: formData.healthStatus || 'Registered (Pending Crop Form)',
       biosecurityScore: 'Georeferenced (GPS Polygon Mapped)',
@@ -845,60 +880,46 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
     setIsSubmitting(true);
     try {
-      // 1. Strict RSBSA duplicate check against online Supabase farmers and offline queue
-      const inputRsbsa = (formData.swineNameOrId || '').trim();
-      if (inputRsbsa && inputRsbsa.toUpperCase() !== 'NO RSBSA') {
-        const dupCheck = await checkDuplicateRsbsa(inputRsbsa, editingParcel?.tagNumber);
-        if (dupCheck.isDuplicate) {
-          setDuplicateRsbsaMatch({
-            farmerName: dupCheck.farmerName || 'Registered Farmer',
-            rsbsa: inputRsbsa
-          });
-          setUniqueViolationAlert(
-            `Warning: A farmer with RSBSA No. ${inputRsbsa} is already registered in the system (${dupCheck.farmerName || 'Existing Record'}). Duplicate entries are not allowed.`
+      const source = editingParcel || linkedFarmer;
+      if (source) {
+        for (const field of ['raiserName', 'swineNameOrId', 'rsbsa_no', 'farmerFamilyName',
+          'farmerGivenName', 'farmerMiddleName', 'farmerSuffix', 'birthday'] as const) {
+          if (linkedFarmer) finalParcel[field] = source[field] || '';
+        }
+        finalParcel.farmerGroupId = farmerKey(source);
+      } else {
+        const reference = rsbsaReference(finalParcel.swineNameOrId);
+        finalParcel.swineNameOrId = finalParcel.rsbsa_no = reference || 'NO RSBSA';
+        finalParcel.farmerGroupId = farmerKey(finalParcel);
+        const dup = await checkDuplicateRsbsa(reference, finalParcel.tagNumber);
+        if (dup.isDuplicate) throw new Error('This RSBSA reference already exists. Choose the existing farmer in step 1.');
+        if (nameDuplicateResolution !== 'distinct_person') {
+          const match = await checkDuplicateFarmerName(
+            [finalParcel.farmerGivenName, finalParcel.farmerMiddleName, finalParcel.farmerFamilyName].filter(Boolean).join(' '),
+            targetBrgy, finalParcel.tagNumber
           );
-          setIsSubmitting(false);
-          return;
+          if (match.isDuplicate) throw new Error('A farmer with this name already exists. Choose the existing farmer in step 1.');
         }
       }
-
-      // 2. Strict Full Name duplicate check against online Supabase farmers and offline queue
-      const fam = (formData.farmerFamilyName || '').trim();
-      const giv = (formData.farmerGivenName || '').trim();
-      const mid = (formData.farmerMiddleName || '').trim();
-      const checkFullName = [giv, mid, fam].filter(Boolean).join(' ') || (formData.raiserName || '').trim();
-
-      if (checkFullName.length >= 3 && nameDuplicateResolution !== 'distinct_person') {
-        const nameCheck = await checkDuplicateFarmerName(
-          checkFullName,
-          targetBrgy,
-          editingParcel?.tagNumber
-        );
-        if (nameCheck.isDuplicate) {
-          setDuplicateNameMatch({
-            existingName: nameCheck.existingName || checkFullName,
-            barangay: nameCheck.barangay || targetBrgy,
-            isExactSameRecord: true
-          });
-          setUniqueViolationAlert(
-            `Warning: A farmer named "${nameCheck.existingName || checkFullName}" is already registered in Barangay ${nameCheck.barangay || targetBrgy}. Duplicate entries are not allowed.`
-          );
-          setIsSubmitting(false);
-          return;
+      const additional = extraParcels.map((entry, index): FarmParcel => {
+        const area = Number(entry.area);
+        if (!entry.purok.trim() || !Number.isFinite(area) || area <= 0 ||
+            !entry.ecosystem || !entry.boundary || boundaryKey(entry.boundary).split('|').length < 3) {
+          throw new Error(`${nextFarmLabels[index + 1]} requires a sitio, positive area, ecosystem, and at least three distinct boundary vertices.`);
         }
-      }
-
-      // 3. Check if duplicate name resolution is unresolved or exact duplicate
-      if (duplicateNameMatch && nameDuplicateResolution !== 'distinct_person') {
-        setUniqueViolationAlert(
-          'Unable to save: This farmer name is already registered in this barangay.'
-        );
-        setIsSubmitting(false);
-        return;
-      }
-
+        const lat = entry.lat ?? entry.boundary.reduce((sum, point) => sum + point[0], 0) / entry.boundary.length;
+        const lng = entry.lng ?? entry.boundary.reduce((sum, point) => sum + point[1], 0) / entry.boundary.length;
+        return {
+          ...finalParcel, tagNumber: entry.id, farmLabel: nextFarmLabels[index + 1],
+          barangay: entry.barangay, farmLocation: entry.barangay.toUpperCase(), purok: entry.purok.trim(),
+          areaHa: area, weightKg: area, farm_area_ha: area, purpose: entry.ecosystem, ecosystem: entry.ecosystem,
+          scale: area < 2 ? 'Smallholder (<2 ha)' : area <= 5 ? 'Medium Farm (2-5 ha)' : 'Commercial (>5 ha)',
+          boundaryCoords: entry.boundary, lat, lng, gps_coordinates: `${lat}, ${lng}`,
+          fieldPhotoUrl: undefined, field_photo_url: undefined
+        };
+      });
+      await onSave(finalParcel, additional);
       saveParcelCustomFields(finalParcel.tagNumber, mergedCustomValues);
-      await withTimeout(Promise.resolve(onSave(finalParcel)), 8000, 'Connection timed out. Record saved to offline queue.');
       onClose();
     } catch (err: any) {
       console.warn('Submission notice:', err);
@@ -911,21 +932,10 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
 
       if (isUniqueViolation) {
         setUniqueViolationAlert(
-          'Unable to save: A duplicate farmer record already exists in this barangay.'
+          err?.message || 'Duplicate farmer or farm parcel.'
         );
       } else {
-        // If it's a fetch/network notice or other non-fatal issue, do not block the user
-        const isFetchError =
-          err?.message?.includes('fetch') ||
-          err?.message?.includes('Failed to fetch') ||
-          err?.name === 'TypeError';
-
-        if (isFetchError) {
-          // Parcel is already persisted in local state and broadcasted
-          onClose();
-        } else {
-          setError(err?.message || 'Error saving farm registration. Please try again.');
-        }
+        setError(err?.message || 'Error saving farm registration. Please try again.');
       }
     } finally {
       setIsSubmitting(false);
@@ -937,14 +947,21 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
     if (activeStep < 3) handleNextStep();
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (editingParcel && onDelete) {
       if (!permissions.canDeleteParcels) {
         setError('Permission Denied: Deleting official farm records is restricted to Central Admin.');
         return;
       }
-      onDelete(editingParcel.tagNumber);
-      onClose();
+      setIsSubmitting(true);
+      try {
+        await onDelete(editingParcel.tagNumber);
+        onClose();
+      } catch (error) {
+        setError(error?.message || 'Unable to delete this parcel.');
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -1043,6 +1060,34 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                 </div>
               )}
 
+              {activeStep === 1 && editingParcel && <OfficeRegistryVerification key={editingParcel.tagNumber} parcel={editingParcel} />}
+              {activeStep === 1 && !editingParcel && (
+                <label className="block space-y-1">
+                  <span className={OFFICE_LABEL_CLASS}>Farmer record</span>
+                  <select className={OFFICE_SELECT_CLASS} value={linkedTag} onChange={(event) => {
+                    const tag = event.target.value;
+                    setLinkedTag(tag);
+                    setDuplicateNameMatch(null);
+                    setDuplicateRsbsaMatch(null);
+                    setUniqueViolationAlert(null);
+                    const farmer = parcels.find(p => p.tagNumber === tag);
+                    setFormData(previous => ({
+                      ...previous,
+                      farmerFamilyName: farmer?.farmerFamilyName || '', farmerGivenName: farmer?.farmerGivenName || '',
+                      farmerMiddleName: farmer?.farmerMiddleName || '', farmerSuffix: farmer?.farmerSuffix || '',
+                      raiserName: farmer?.raiserName || '', swineNameOrId: farmer?.swineNameOrId || '',
+                      birthday: farmer?.birthday || '', contactNumber: farmer?.contactNumber || '', photoUrl: farmer?.photoUrl,
+                      address: farmer?.address || previous.address,
+                      residential_address: farmer?.residential_address || farmer?.address || previous.residential_address
+                    }));
+                  }}>
+                    <option value="">Register a new farmer</option>
+                    {groupFarmerParcels(parcels.filter(p => isUserAuthorizedForBarangay(currentUser, p.barangay))).map(p =>
+                      <option key={p.tagNumber} value={p.tagNumber}>{p.raiserName} · {p.swineNameOrId || p.tagNumber}</option>
+                    )}
+                  </select>
+                </label>
+              )}
               {/* Full Name & Barangay Duplicate Warning */}
               {showNameDuplicateToast && duplicateNameMatch && (
                 <div className="p-3 bg-amber-50 border border-amber-300 rounded-md flex items-start justify-between gap-3 text-xs text-amber-950">
@@ -1463,8 +1508,19 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                     }
                   >
                     <div className="grid grid-cols-1 sm:grid-cols-4 gap-3.5">
+                      <p className="sm:col-span-4 text-sm font-semibold">Farm Parcel Number · {editingParcel ? farmLabel(editingParcel) : nextFarmLabels[0]}</p>
+                      <label className="space-y-1 sm:col-span-2">
+                        <span className={OFFICE_LABEL_CLASS}>Ecosystem</span>
+                        <select aria-label="Ecosystem" className={OFFICE_SELECT_CLASS} value={formData.purpose || ''}
+                          onChange={event => setFormData(data => ({ ...data, purpose: event.target.value, ecosystem: event.target.value }))}>
+                          <option value="">Select ecosystem</option>
+                          {formData.purpose && !['Irrigated', 'Rainfed'].includes(formData.purpose) &&
+                            <option>{formData.purpose}</option>}
+                          <option>Irrigated</option><option>Rainfed</option>
+                        </select>
+                      </label>
                       {/* Farm Barangay - RESTRICTED TO LFT ASSIGNED JURISDICTION */}
-                      {formSchema.isVisible('reg-farm-barangay') && (
+                      {(!editingParcel || formSchema.isVisible('reg-farm-barangay')) && (
                         <div style={{ order: formSchema.getFieldOrder('reg-farm-barangay') }} className="space-y-1 sm:col-span-2">
                           <div className="flex items-center justify-between gap-2">
                             <label className={OFFICE_LABEL_CLASS}>
@@ -1506,7 +1562,7 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                       )}
 
                       {/* Purok / Sitio */}
-                      {formSchema.isVisible('reg-purok') && (
+                      {(!editingParcel || formSchema.isVisible('reg-purok')) && (
                         <div style={{ order: formSchema.getFieldOrder('reg-purok') }} className="space-y-1">
                           <label className={OFFICE_LABEL_CLASS}>
                             {formSchema.getLabel('reg-purok', 'Purok / Sitio')}{' '}
@@ -1621,6 +1677,8 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                         setFormData((prev) => ({ ...prev, lat, lng }));
                       }}
                       disabled={geoLoading}
+                      boundary={formData.boundaryCoords}
+                      onBoundaryChange={(boundaryCoords) => setFormData(previous => ({ ...previous, boundaryCoords }))}
                     />
 
                     {formSchema.isVisible('reg-field-photo') && (
@@ -1649,6 +1707,37 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
                     />
                   </OfficeSectionCard>
 
+                  {!editingParcel && (
+                    <div className="space-y-3">
+                      {extraParcels.map((entry, index) => {
+                        const update = (fields: Partial<typeof entry>) => setExtraParcels(before => before.map(item =>
+                          item.id === entry.id ? { ...item, ...fields } : item
+                        ));
+                        return <OfficeSectionCard key={entry.id} title={nextFarmLabels[index + 1]}>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <label>Barangay<select aria-label="Barangay" className={OFFICE_SELECT_CLASS} value={entry.barangay} onChange={e => update({ barangay: e.target.value })}>
+                              {availableBarangays.map(b => <option key={b.name}>{b.name}</option>)}
+                            </select></label>
+                            <label>Sitio<input aria-label="Sitio" className={OFFICE_INPUT_CLASS} value={entry.purok} onChange={e => update({ purok: e.target.value })} /></label>
+                            <label>Area (ha)<input aria-label="Area (ha)" className={OFFICE_INPUT_CLASS} type="number" min="0.0001" step="any" value={entry.area} onChange={e => update({ area: e.target.value })} /></label>
+                            <label>Ecosystem<select aria-label="Ecosystem" className={OFFICE_SELECT_CLASS} value={entry.ecosystem} onChange={e => update({ ecosystem: e.target.value })}>
+                              <option>Irrigated</option><option>Rainfed</option>
+                            </select></label>
+                          </div>
+                          <RegistrationLocationMap latitude={entry.lat} longitude={entry.lng} boundary={entry.boundary} disabled={false}
+                            onPick={(lat, lng) => update({ lat, lng })} onBoundaryChange={boundary => update({ boundary })} />
+                          <button type="button" className="text-sm font-semibold text-red-700" onClick={() =>
+                            setExtraParcels(before => before.filter(item => item.id !== entry.id))}>Remove {nextFarmLabels[index + 1]}</button>
+                        </OfficeSectionCard>;
+                      })}
+                      <button type="button" className="rounded-lg border border-emerald-300 px-3 py-2 text-sm font-semibold text-emerald-800"
+                        onClick={() => setExtraParcels(before => [...before, {
+                          id: `${parcelPrefix}-${crypto.randomUUID().slice(0, 12).toUpperCase()}`,
+                          barangay: formData.barangay || effectiveDefaultBarangay, purok: '', area: '', ecosystem: 'Irrigated'
+                        }])}>+ Add Another Farm Parcel</button>
+                    </div>
+                  )}
+
                   {customRegSections.map((sec) => {
                     const secFields = formSchema.getCustomFieldsForSection(sec.label);
                     if (secFields.length === 0) return null;
@@ -1668,7 +1757,12 @@ export const AddParcelModal: React.FC<AddParcelModalProps> = ({
               )}
               {activeStep === 3 && (
                 <>
-                  <p className="text-sm text-slate-700">Review the farmer and farm details before saving.</p>
+                  <p className="text-sm text-slate-700">Review {editingParcel ? farmLabel(editingParcel) : nextFarmLabels.join(", ")} before saving.</p>
+                  {extraParcels.length > 0 && <ul className="space-y-1 text-sm text-slate-700" aria-label="Additional parcels">
+                    {extraParcels.map((entry, index) => <li key={entry.id}>
+                      <strong>{nextFarmLabels[index + 1]}</strong> · {entry.purok}, {entry.barangay} · {entry.area} ha · {entry.ecosystem} · {entry.boundary?.length || 0} vertices
+                    </li>)}
+                  </ul>}
                   {[
                     {
                       title: sec1Label,

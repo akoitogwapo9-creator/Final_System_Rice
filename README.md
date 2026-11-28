@@ -39,14 +39,14 @@ git push -u origin main
 1. In **Authentication → Users**, create or invite the Central Admin
    (`admin@gmail.com`), and confirm the account email.
 2. On the existing project, apply [supabase_schema.sql](supabase_schema.sql)
-   and then the [staff accounts migration](supabase/migrations/202611260001_staff_accounts.sql)
+   and then the [staff accounts migration](supabase/migrations/20261128052124_staff_accounts.sql)
    in the Supabase SQL Editor before deploying the updated client. The
    migration links the confirmed admin user and upgrades the existing LFT roster.
    If the admin Auth user is created later, run the migration's
    `INSERT INTO public.admin_accounts` statement again.
 3. In **Authentication → URL Configuration**, add the deployed
    `/reset-password` URL to **Redirect URLs**.
-4. Apply the [LFT account scope migration](supabase/migrations/202611260003_lft_account_scope.sql).
+4. Apply the [LFT account scope migration](supabase/migrations/20261128052143_lft_account_scope.sql).
    It keeps existing officer records and restricts signed-in LFT parcel access
    to each officer’s assigned barangays.
 5. Set `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) as a **server-only**
@@ -89,3 +89,20 @@ This account is available only with the Vite development server and is excluded 
 - `/api` – Serverless functions for `/api/health` and `/api/gemini/chat` on Vercel.
 - `server.ts` – Full-stack Node/Express server for self-hosted or containerized environments.
 - `src/` – Complete React 19 + TypeScript + Tailwind CSS application with Leaflet GIS mapping and Supabase real-time integration.
+
+
+#### MAO office registry
+
+Run the SQL files in `supabase/migrations` in timestamp order before deploying the
+matching frontend. Rice_Registry_V2 already has these migrations applied.
+
+Use **Rice Farm Records** to register parcels and review farmer and parcel
+verification. Use **Crops & Seed Distribution** to record a planting, request
+inputs, receive stock, release inputs, or print the release acknowledgment.
+An Extension Worker sees records for assigned barangays. A Central Admin can
+verify records, receive municipal stock, review audit activity, and export the
+municipal summary.
+
+Connection interruptions queue parcel and distribution changes under the active
+staff account. Reconnect in the same account to sync. A release is confirmed
+and printable after the server accepts it and updates stock.

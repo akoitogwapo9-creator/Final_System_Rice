@@ -1,6 +1,6 @@
+import { farmerKey, farmLabel } from '../data/officeRegistry';
 import { readRegistryPreferences } from '../data/registryPreferences';
-import { isVerifiedAdminEmail } from './adminIdentity';
-import { SupabaseClient, RealtimeChannel, type User as SupabaseAuthUser } from '@supabase/supabase-js';
+import { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { supabase as sharedSupabaseClient, memoryAuthStorage } from '../supabase';
 import { FarmParcel, LftAccount, User } from '../types';
 import { getRecordedCropValue, hasActualProduction, isLegacyProductionEstimate, normalizeSeasonalRecord, seasonOrder } from '../data/seasonalProduction';
@@ -11,24 +11,6 @@ export { memoryAuthStorage };
 export const supabaseClient: SupabaseClient = sharedSupabaseClient;
 
 export { DEFAULT_ADMIN_EMAIL } from './adminIdentity';
-
-// Use only an identity returned by Supabase Auth, never the submitted username or user metadata.
-export function getVerifiedCentralAdmin(authUser: SupabaseAuthUser): User | null {
-  const email = authUser.email?.trim().toLowerCase();
-  if (!isVerifiedAdminEmail(authUser)) {
-    return null;
-  }
-
-  return {
-    id: authUser.id,
-    email,
-    username: 'admin',
-    name: 'Municipal Administrator',
-    title: 'Municipal Agriculture Administrator',
-    role: 'Central Admin',
-    office: 'Silago Municipal Agriculture Office (DA-MAO)'
-  };
-}
 
 // PostgREST and Storage independently enforce access through database grants and RLS.
 export async function hasSupabaseWriteSession(): Promise<boolean> {
@@ -187,6 +169,17 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     swineNameOrId: rsbsaNo || 'NO RSBSA',
     rsbsa_no: rsbsaNo || 'NO RSBSA',
     raiserName: displayName.toUpperCase() || 'UNKNOWN FARMER',
+    farmLabel: row.farm_label || row.farmLabel || 'Farm 1',
+    farmerGroupId: row.farmer_group_id || row.farmerGroupId,
+    offlineBatchId: row.offlineBatchId,
+    parcelVerificationStatus: row.parcel_verification_status || row.parcelVerificationStatus,
+    parcelVerifiedBy: row.parcel_verified_by || row.parcelVerifiedBy,
+    parcelVerifiedAt: row.parcel_verified_at || row.parcelVerifiedAt,
+    farmerVerificationStatus: row.farmer_verification_status || row.farmerVerificationStatus,
+    farmerVerifiedBy: row.farmer_verified_by || row.farmerVerifiedBy,
+    farmerVerifiedAt: row.farmer_verified_at || row.farmerVerifiedAt,
+    customFields: row.custom_fields || row.customFields,
+    isArchived: row.is_archived ?? row.isArchived,
     farmerFamilyName,
     farmerGivenName,
     farmerMiddleName,
@@ -253,7 +246,7 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
     parcel.plantingDate = latest.plantingDate;
     parcel.harvestDate = latest.harvestDate || '';
     if (latest.tenure !== undefined) parcel.tenure = parcel.sex = latest.tenure;
-    if (latest.ecosystem !== undefined) parcel.ecosystem = parcel.purpose = latest.ecosystem;
+    if (!parcel.ecosystem && latest.ecosystem) parcel.ecosystem = parcel.purpose = latest.ecosystem;
     if (latest.irrigationAssociation !== undefined) parcel.irrigationAssociation = latest.irrigationAssociation;
     if (latest.targetYieldMt !== undefined) parcel.targetYieldMt = latest.targetYieldMt ?? undefined;
   } else if (!latest && !parcel.plantingDate && !parcel.harvestDate &&
@@ -261,7 +254,7 @@ export function mapFarmerRowToParcel(row: any): FarmParcel {
        parcel.healthStatus === 'Registered (Pending Crop Form)')) {
     // Earlier registration forms saved crop defaults for these unplanted parcels.
     parcel.breed = parcel.variety = parcel.seedType = parcel.croppingSeason = parcel.season = '';
-    parcel.sex = parcel.tenure = parcel.purpose = parcel.ecosystem = parcel.irrigationAssociation = '';
+    parcel.sex = parcel.tenure = parcel.irrigationAssociation = '';
     parcel.targetYieldMt = undefined;
   }
   return parcel;
@@ -650,12 +643,20 @@ export async function uploadFarmPhoto(file: File, recordId: string = 'parcel'): 
 // ==========================================
 // OFFLINE QUEUE & SYNC HELPERS (offline_pending_farms)
 // ==========================================
-const OFFLINE_QUEUE_KEY = 'offline_pending_farms';
+let registryQueueOwner = '';
 
-export function getOfflinePendingFarms(): FarmParcel[] {
-  if (typeof window === 'undefined') return [];
+export function setRegistryQueueOwner(owner: string) {
+  registryQueueOwner = owner;
+}
+
+function registryQueueKey() {
+  return registryQueueOwner ? `offline_pending_farms:${registryQueueOwner}` : '';
+}
+
+export function getOfflinePendingFarms(key = registryQueueKey()): FarmParcel[] {
+  if (typeof window === 'undefined' || !key) return [];
   try {
-    const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return [];
     const list = JSON.parse(raw);
     return Array.isArray(list)
@@ -667,41 +668,29 @@ export function getOfflinePendingFarms(): FarmParcel[] {
   }
 }
 
-function saveOfflinePendingFarm(parcel: FarmParcel): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const current = getOfflinePendingFarms().filter(
-      (p) => p.tagNumber !== parcel.tagNumber && (!parcel.swineNameOrId || p.swineNameOrId !== parcel.swineNameOrId)
-    );
-    const tagged: FarmParcel = {
+function saveOfflinePendingFarms(batch: FarmParcel[], key = registryQueueKey()): void {
+  if (!key) throw new Error('Sign in before saving offline records.');
+  const ids = new Set(batch.map(parcel => parcel.tagNumber));
+  const current = getOfflinePendingFarms(key);
+  localStorage.setItem(key, JSON.stringify([
+    ...current.filter(parcel => !ids.has(parcel.tagNumber)),
+    ...batch.map(parcel => ({
       ...parcel,
-      is_pending_sync: true,
-      isPendingSync: true,
-      syncStatus: 'Offline / Pending Sync'
-    };
-    const updated = [tagged, ...current];
-    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(updated));
-    broadcastRealtimeChange('parcel_upsert', { parcel: tagged });
-  } catch (e) {
-    console.warn('Error saving offline pending farm:', e);
-  }
+      offlineBatchId: current.find(item => item.tagNumber === parcel.tagNumber)?.offlineBatchId || parcel.offlineBatchId,
+      is_pending_sync: true, isPendingSync: true, syncStatus: 'Offline / Pending Sync'
+    }))
+  ]));
 }
 
-function removeOfflinePendingFarm(tagOrRsbsa: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const current = getOfflinePendingFarms();
-    const filtered = current.filter((p) => p.tagNumber !== tagOrRsbsa && p.swineNameOrId !== tagOrRsbsa && p.rsbsa_no !== tagOrRsbsa);
-    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(filtered));
-  } catch (e) {
-    console.warn('Error removing offline pending farm:', e);
-  }
+function removeOfflinePendingFarm(tagNumber: string, key = registryQueueKey()): void {
+  if (typeof window === 'undefined' || !key) return;
+  localStorage.setItem(key, JSON.stringify(getOfflinePendingFarms(key).filter(p => p.tagNumber !== tagNumber)));
 }
 
 export function clearOfflinePendingFarms(): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.removeItem(OFFLINE_QUEUE_KEY);
+    if (registryQueueKey()) localStorage.removeItem(registryQueueKey());
   } catch {}
 }
 
@@ -851,87 +840,37 @@ export async function syncOfflinePendingFarms(): Promise<{
   conflicts: FarmParcel[];
 }> {
   if (!await hasSupabaseWriteSession()) return { syncedCount: 0, conflictCount: 0, conflicts: [] };
-  const queue = getOfflinePendingFarms();
-  if (queue.length === 0) return { syncedCount: 0, conflictCount: 0, conflicts: [] };
+  const key = registryQueueKey();
+  const batches = new Map<string, FarmParcel[]>();
+  for (const parcel of getOfflinePendingFarms(key)) {
+    const key = parcel.offlineBatchId || parcel.tagNumber;
+    const batch = batches.get(key) || [];
+    batch.push(parcel);
+    batches.set(key, batch);
+  }
 
   let syncedCount = 0;
-  let conflictCount = 0;
   const conflicts: FarmParcel[] = [];
-  const remainingQueue: FarmParcel[] = [];
-
-  for (const parcel of queue) {
-    // Check if duplicate was inserted while offline
-    if (parcel.swineNameOrId && parcel.swineNameOrId.toUpperCase() !== 'NO RSBSA') {
-      const dup = await checkDuplicateRsbsa(parcel.swineNameOrId, parcel.tagNumber);
-      if (dup.isDuplicate && !dup.isOfflineMatch) {
-        conflictCount++;
-        conflicts.push(parcel);
-        remainingQueue.push(parcel);
+  for (const batch of batches.values()) {
+    if (key !== registryQueueKey()) break;
+    try {
+      const { error } = await supabaseClient.from('farmers')
+        .upsert(batch.map(sanitizeFarmerPayload), { onConflict: 'id' });
+      if (error) {
+        if (error.code && !error.code.startsWith('08')) conflicts.push(...batch);
         continue;
       }
-    }
-
-    try {
-      const farmerPayload = sanitizeFarmerPayload(parcel);
-      const farmPayload = sanitizeFarmPayload(parcel);
-
-      let success = false;
-      try {
-        const { error: fErr } = await supabaseClient
-          .from('farmers')
-          .upsert(farmerPayload, { onConflict: 'id' });
-        if (!fErr) {
-          success = true;
-        } else {
-          // Schema fallback to core columns
-          const corePayload = {
-            id: farmerPayload.id,
-            rsbsa_number: farmerPayload.rsbsa_number,
-            farmer_name: farmerPayload.farmer_name,
-            barangay: farmerPayload.barangay,
-            contact_number: farmerPayload.contact_number,
-            lat: farmerPayload.lat,
-            lng: farmerPayload.lng,
-            area_ha: farmerPayload.area_ha,
-            seasonal_records: farmerPayload.seasonal_records
-          };
-          const { error: coreErr } = await supabaseClient
-            .from('farmers')
-            .upsert(corePayload, { onConflict: 'id' });
-          if (!coreErr) success = true;
-        }
-      } catch {}
-
-      if (success) {
-        try {
-          await supabaseClient.from('farms').upsert(farmPayload, { onConflict: 'id' });
-        } catch {}
-
-        syncedCount++;
-        const syncedParcel: FarmParcel = {
-          ...parcel,
-          is_pending_sync: false,
-          isPendingSync: false,
-          syncStatus: 'Live Synced'
-        };
-        await broadcastRealtimeChange('parcel_upsert', { parcel: syncedParcel });
-      } else {
-        remainingQueue.push(parcel);
-      }
-    } catch (e) {
-      remainingQueue.push(parcel);
+      const snapshots = new Map(batch.map(parcel => [parcel.tagNumber, JSON.stringify(parcel)]));
+      const remaining = getOfflinePendingFarms(key).filter(parcel =>
+        snapshots.get(parcel.tagNumber) !== JSON.stringify(parcel)
+      );
+      localStorage.setItem(key, JSON.stringify(remaining));
+      syncedCount += batch.length;
+    } catch (error) {
+      console.warn('Offline registry batch remains queued:', error);
     }
   }
-
-  if (typeof window !== 'undefined') {
-    if (remainingQueue.length > 0) {
-      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remainingQueue));
-    } else {
-      localStorage.removeItem(OFFLINE_QUEUE_KEY);
-    }
-  }
-
-  return { syncedCount, conflictCount, conflicts };
+  return { syncedCount, conflictCount: conflicts.length, conflicts };
 }
 
 function formatFarmerNameForStorage(parcel: FarmParcel): string {
@@ -979,6 +918,12 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
 
   return {
     id: formattedId,
+    farm_label: farmLabel(norm),
+    farmer_group_id: farmerKey(norm),
+    boundary_coords: norm.boundaryCoords?.length ? norm.boundaryCoords : null,
+    custom_fields: norm.customFields || {},
+    is_archived: Boolean(norm.isArchived),
+    irrigation_association: norm.irrigationAssociation || null,
     rsbsa_number: norm.swineNameOrId || norm.rsbsa_no || '',
     farmer_name: formatFarmerNameForStorage(norm),
     barangay: exactBarangay,
@@ -1001,6 +946,7 @@ export function sanitizeFarmerPayload(parcel: FarmParcel) {
     sync_status: 'Live Synced',
     seasonal_records: (norm.seasonalRecords || []).map((r) => ({
       id: r.id,
+      farm_label: farmLabel(norm),
       season: r.season,
       seasonName: r.seasonName || r.season,
       seedVariety: r.seedVariety,
@@ -1195,76 +1141,36 @@ export const supabaseDb = {
    * Insert a new farm record directly to Supabase 'farmers' table with offline queue fallback
    */
   async insertFarmRecord(parcel: FarmParcel): Promise<boolean> {
-    if (!await hasSupabaseWriteSession()) return false;
-    const norm = mapFarmerRowToParcel(parcel);
-    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    await this.upsertParcels([parcel]);
+    return true;
+  },
 
-    // If device is offline, store locally in offline pending queue immediately
-    if (!isOnline) {
-      saveOfflinePendingFarm(norm);
-      return true;
+  async upsertParcels(parcels: FarmParcel[]): Promise<FarmParcel[]> {
+    const key = registryQueueKey();
+    if (!(await hasSupabaseWriteSession())) throw new Error('Sign in again before saving registry records.');
+    const batch = parcels.map(parcel => mapFarmerRowToParcel({
+      ...parcel, offlineBatchId: parcels.length > 1 ? parcels[0].tagNumber : parcel.offlineBatchId
+    }));
+    const queue = () => {
+      saveOfflinePendingFarms(batch, key);
+      const ids = new Set(batch.map(parcel => parcel.tagNumber));
+      return getOfflinePendingFarms(key).filter(parcel => ids.has(parcel.tagNumber));
+    };
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return queue();
+
+    const { data, error } = await withTimeout(
+      supabaseClient.from('farmers').upsert(batch.map(sanitizeFarmerPayload), { onConflict: 'id' }).select('*'),
+      10000, 'Registry connection timeout'
+    ).catch(error => {
+      if (error instanceof TypeError || error?.message === 'Registry connection timeout') return { data: null, error: { code: '', message: String(error) } };
+      throw error;
+    });
+    if (error) {
+      if (!error.code || error.code.startsWith('08')) return queue();
+      throw error;
     }
-
-    const farmerPayload = sanitizeFarmerPayload(norm);
-    let success = false;
-
-    // 1. Primary insert to 'farmers' table with 6s timeout
-    try {
-      const upsertPromise = supabaseClient
-        .from('farmers')
-        .upsert(farmerPayload, { onConflict: 'id' });
-
-      const { error: fErr } = await withTimeout(upsertPromise, 6000, 'Supabase insert timeout');
-
-      if (fErr) {
-        if (fErr.code === '23505' || fErr.message?.includes('23505')) {
-          throw fErr;
-        }
-        console.warn('Supabase farmers upsert schema notice:', fErr.message);
-
-        // Fallback to core columns if custom columns caused error
-        const corePayload = {
-          id: farmerPayload.id,
-          rsbsa_number: farmerPayload.rsbsa_number,
-          farmer_name: farmerPayload.farmer_name,
-          barangay: farmerPayload.barangay,
-          contact_number: farmerPayload.contact_number,
-          lat: farmerPayload.lat,
-          lng: farmerPayload.lng,
-          area_ha: farmerPayload.area_ha,
-          seasonal_records: farmerPayload.seasonal_records
-        };
-        const corePromise = supabaseClient.from('farmers').upsert(corePayload, { onConflict: 'id' });
-        const { error: coreErr } = await withTimeout(corePromise, 4000, 'Core upsert timeout');
-        if (!coreErr) {
-          success = true;
-        } else if (coreErr.code === '23505' || coreErr.message?.includes('23505')) {
-          throw coreErr;
-        }
-      } else {
-        success = true;
-      }
-    } catch (err: any) {
-      if (err?.code === '23505' || err?.message?.includes('23505')) {
-        throw err;
-      }
-      console.warn('Network timeout or error on farmers insert:', err?.message || err);
-    }
-
-    // Keep the full parcel queued until its seasonal records can be persisted.
-    if (!success) {
-      saveOfflinePendingFarm(norm);
-      return true;
-    }
-
-    // Remove from offline queue if it was previously queued
-    removeOfflinePendingFarm(norm.tagNumber);
-
-    // Immediately broadcast to all other devices & tabs
-    try {
-      await broadcastRealtimeChange('parcel_upsert', { parcel: norm });
-    } catch {}
-    return success;
+    for (const parcel of batch) removeOfflinePendingFarm(parcel.tagNumber, key);
+    return (data || []).map(mapFarmerRowToParcel);
   },
 
   /**
@@ -1278,104 +1184,27 @@ export const supabaseDb = {
    * Update an existing farm record in Supabase 'farmers' table and broadcast real-time sync event
    */
   async updateFarmRecord(tagNumber: string, updatedFields: Partial<FarmParcel>): Promise<void> {
-    if (!await hasSupabaseWriteSession()) return;
-    try {
-      const merged = mapFarmerRowToParcel({
-        ...updatedFields,
-        tagNumber
-      });
-
-      const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
-      if (!isOnline) {
-        saveOfflinePendingFarm(merged);
-        return;
-      }
-
-      const farmerPayload = sanitizeFarmerPayload(merged);
-
-      try {
-        const updatePromise = supabaseClient.from('farmers').upsert(farmerPayload, { onConflict: 'id' });
-        await withTimeout(updatePromise, 6000, 'Supabase update timeout');
-      } catch (err) {
-        console.warn('Supabase farmers update notice:', err);
-        // Fallback to core columns
-        const corePayload = {
-          id: farmerPayload.id,
-          rsbsa_number: farmerPayload.rsbsa_number,
-          farmer_name: farmerPayload.farmer_name,
-          barangay: farmerPayload.barangay,
-          contact_number: farmerPayload.contact_number,
-          lat: farmerPayload.lat,
-          lng: farmerPayload.lng,
-          area_ha: farmerPayload.area_ha,
-          seasonal_records: farmerPayload.seasonal_records
-        };
-        try {
-          await withTimeout(supabaseClient.from('farmers').upsert(corePayload, { onConflict: 'id' }), 4000);
-        } catch {}
-      }
-
-      await broadcastRealtimeChange('parcel_upsert', { parcel: merged });
-    } catch (e) {
-      console.warn('Supabase updateFarmRecord notice:', e);
-    }
+    const existing = (await this.getFarmRecords()).find(parcel => parcel.tagNumber === tagNumber);
+    if (!existing) throw new Error('Farm parcel could not be found.');
+    await this.upsertParcels([{ ...existing, ...updatedFields, tagNumber }]);
   },
 
   /**
    * Delete a farm record from Supabase 'farmers' table and broadcast real-time sync event
    */
   async deleteFarmRecord(tagNumber: string): Promise<void> {
-    if (!await hasSupabaseWriteSession()) return;
-    try {
-      removeOfflinePendingFarm(tagNumber);
-
-      const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
-      if (isOnline) {
-        const cleanTag = tagNumber.startsWith('FARMER-') ? tagNumber : `FARMER-${tagNumber}`;
-        const delPromise = supabaseClient.from('farmers').delete().in('id', [tagNumber, cleanTag]);
-        await withTimeout(delPromise, 5000);
-      }
-    } catch (e) {
-      console.warn('Supabase farm record delete notice:', e);
-    }
-
-    // Immediately broadcast to all other devices & tabs
-    try {
-      await broadcastRealtimeChange('parcel_delete', { tagNumber });
-    } catch {}
+    await this.deleteBulkFarmRecords([tagNumber]);
   },
 
-  /**
-   * Bulk delete farm records from Supabase 'farmers' table and broadcast real-time sync event
-   */
   async deleteBulkFarmRecords(tagNumbers: string[]): Promise<boolean> {
-    if (!await hasSupabaseWriteSession()) return false;
-    if (!tagNumbers || tagNumbers.length === 0) return true;
-    try {
-      tagNumbers.forEach((tag) => removeOfflinePendingFarm(tag));
-
-      const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
-      if (isOnline) {
-        const farmerIds = Array.from(
-          new Set([
-            ...tagNumbers,
-            ...tagNumbers.map((t) => (t.startsWith('FARMER-') ? t : `FARMER-${t}`))
-          ])
-        );
-        const delPromise = supabaseClient.from('farmers').delete().in('id', farmerIds);
-        await withTimeout(delPromise, 6000);
-      }
-
-      for (const tagNumber of tagNumbers) {
-        try {
-          await broadcastRealtimeChange('parcel_delete', { tagNumber });
-        } catch {}
-      }
-      return true;
-    } catch (e) {
-      console.warn('Supabase bulk delete notice:', e);
-      return false;
-    }
+    if (!(await hasSupabaseWriteSession())) throw new Error('Sign in before deleting registry records.');
+    if (!tagNumbers.length) return true;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error('Connect to the internet to delete farm parcels.');
+    const { error } = await supabaseClient.from('farmers').delete().in('id', tagNumbers);
+    if (error?.code === '23503') throw new Error('A selected farm has a distribution history. Archive the parcel to preserve its receipts.');
+    if (error) throw error;
+    for (const tagNumber of tagNumbers) removeOfflinePendingFarm(tagNumber);
+    return true;
   },
 
   /**
@@ -1383,21 +1212,6 @@ export const supabaseDb = {
    */
   async deleteParcel(tagNumber: string): Promise<void> {
     return this.deleteFarmRecord(tagNumber);
-  },
-
-  /**
-   * Bulk sync parcels to Supabase
-   */
-  async syncParcels(parcels: FarmParcel[]): Promise<void> {
-    if (!await hasSupabaseWriteSession()) return;
-    try {
-      const payloads = parcels.map(sanitizeFarmerPayload);
-      await supabaseClient.from('farmers').upsert(payloads, { onConflict: 'id' });
-    } catch (e) {
-      console.warn('Supabase bulk sync notice:', e);
-    }
-
-    await broadcastRealtimeChange('parcels_sync', { parcels });
   },
 
   /**

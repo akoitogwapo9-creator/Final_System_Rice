@@ -1,3 +1,5 @@
+import { OfficeRegistryVerification } from './OfficeRegistryVerification';
+import { farmLabel } from '../data/officeRegistry';
 import { formatRegistryDate, formatRegistryName } from '../data/registryPreferences';
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
@@ -28,7 +30,7 @@ interface ParcelDetailModalProps {
   initialTab?: ParcelModalTab;
   onClose: () => void;
   onEdit?: (parcel: FarmParcel) => void;
-  onDelete?: (tagNumber: string) => void;
+  onDelete?: (tagNumber: string) => Promise<void> | void;
 }
 
 export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
@@ -39,6 +41,8 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
   onDelete
 }) => {
   const [activeTab, setActiveTab] = useState<ParcelModalTab>(initialTab);
+  const [deleteError, setDeleteError] = useState('');
+  const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [seasonalModalOpen, setSeasonalModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<SeasonalProductionRecord | null>(null);
@@ -77,6 +81,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
     ? calculateCropGrowthStage(parcel.plantingDate, parcel.breed)
     : null;
   const profileDetails = [
+    ['Farm parcel number', farmLabel(parcel)],
     ['Registration Parcel ID', parcel.tagNumber],
     ['RSBSA Reference', parcel.swineNameOrId],
     ['Date of Birth', formatRegistryDate(parcel.birthday, registryPreferences.dateFormat)],
@@ -169,6 +174,7 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
 
         {/* Content Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-6">
+          {activeTab === 'profile' && <OfficeRegistryVerification key={parcel.tagNumber} parcel={parcel} />}
           {/* Certificate View */}
           {activeTab === 'certificate' ? (
             <div id="printable-certificate-document" className="mx-auto max-w-4xl p-5 sm:p-8 bg-white border border-emerald-900/15 rounded-2xl space-y-5 text-center shadow-sm relative">
@@ -365,12 +371,22 @@ export const ParcelDetailModal: React.FC<ParcelDetailModalProps> = ({
                 <p className="text-xs text-rose-700 mt-0.5">
                   Are you sure you want to permanently delete registration <strong>{parcel.tagNumber}</strong> for <strong>{formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames)}</strong>? This action cannot be undone.
                 </p>
+                {deleteError && <p role="alert" className="mt-2 text-xs font-semibold text-rose-800">{deleteError}</p>}
                 <div className="flex items-center gap-2 mt-2.5">
                   <button
                     type="button"
-                    onClick={() => {
-                      onDelete?.(parcel.tagNumber);
-                      onClose();
+                    disabled={deleting}
+                    onClick={async () => {
+                      setDeleteError('');
+                      setDeleting(true);
+                      try {
+                        await onDelete?.(parcel.tagNumber);
+                        onClose();
+                      } catch (error) {
+                        setDeleteError(error?.message || 'Unable to delete this farm parcel.');
+                      } finally {
+                        setDeleting(false);
+                      }
                     }}
                     className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg transition cursor-pointer shadow-xs"
                   >

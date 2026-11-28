@@ -2,18 +2,18 @@
 export const OFFICIAL_15_BARANGAYS = [
   'Balagawan',
   'Catmon',
-  'Calubian',
   'Hingatungan',
   'Imelda',
   'Katipunan',
-  'Laguna',
+  'Laguma',
   'Mercedes',
   'Poblacion District 1',
   'Poblacion District 2',
   'Puntana',
   'Salvacion',
-  'San Isidro',
-  'San Roque',
-  'Sap-ang'
+  'Sap-ang',
+  'Sudmon',
+  'Tuba-on',
+  'Tubod'
 ] as const;
 

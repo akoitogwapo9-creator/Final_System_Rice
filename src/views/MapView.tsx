@@ -1,3 +1,4 @@
+import { farmLabel } from '../data/officeRegistry';
 import { formatRegistryName } from '../data/registryPreferences';
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import L from 'leaflet';
@@ -1387,7 +1388,7 @@ export const MapView: React.FC<MapViewProps> = ({
               L.DomEvent.stopPropagation(e);
               handleSelectParcelFromMap(parcel);
             })
-            .bindTooltip(`<strong>${escapeHtml(parcel.tagNumber)}</strong> &bull; ${escapeHtml(formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames))}<br><span style="font-size:10.5px; color:#047857;">Boundary recorded; center point needs GPS review.</span>`, { sticky: true });
+            .bindTooltip(`<strong>${escapeHtml(farmLabel(parcel))} · ${escapeHtml(parcel.tagNumber)}</strong> &bull; ${escapeHtml(formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames))}<br><span style="font-size:10.5px; color:#047857;">Boundary recorded; center point needs GPS review.</span>`, { sticky: true });
         }
         return;
       }
@@ -1464,7 +1465,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
       pinMarker.bindTooltip(
         `<div style="font-size: 11px; padding: 4px; font-family: sans-serif;">
-          <div style="font-weight: 900; color: #2563eb; font-size: 12px;">${escapeHtml(parcel.tagNumber)}</div>
+          <div style="font-weight: 900; color: #2563eb; font-size: 12px;">${escapeHtml(farmLabel(parcel))} · ${escapeHtml(parcel.tagNumber)}</div>
           <div style="font-weight: 800; color: #0f172a; margin-top: 1px;">${escapeHtml(formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames))}</div>
           <div style="color: #475569; font-size: 10.5px;">📍 Brgy. ${escapeHtml(parcel.barangay)} &bull; <strong>${getParcelAreaHa(parcel) > 0 ? `${getParcelAreaHa(parcel).toFixed(registryPreferences.areaPrecision)} ha` : 'Area not recorded'}</strong></div>
           <div style="font-size: 10px; color: #16a34a; font-weight: 700; margin-top: 2px;">🌾 ${escapeHtml(parcel.breed)}</div>
@@ -1488,7 +1489,7 @@ export const MapView: React.FC<MapViewProps> = ({
         });
 
         poly.bindTooltip(
-          `<strong>${escapeHtml(parcel.tagNumber)}</strong> &bull; ${escapeHtml(formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames))}<br><span style="font-size:10.5px; color:#047857;">Area: <strong>${getParcelAreaHa(parcel) > 0 ? `${getParcelAreaHa(parcel).toFixed(registryPreferences.areaPrecision)} ha` : 'Not recorded'}</strong> (${escapeHtml(parcel.breed)})</span>`,
+          `<strong>${escapeHtml(farmLabel(parcel))} · ${escapeHtml(parcel.tagNumber)}</strong> &bull; ${escapeHtml(formatRegistryName(parcel.raiserName, registryPreferences.uppercaseNames))}<br><span style="font-size:10.5px; color:#047857;">Area: <strong>${getParcelAreaHa(parcel) > 0 ? `${getParcelAreaHa(parcel).toFixed(registryPreferences.areaPrecision)} ha` : 'Not recorded'}</strong> (${escapeHtml(parcel.breed)})</span>`,
           { sticky: true }
         );
       }
@@ -2674,7 +2675,7 @@ export const MapView: React.FC<MapViewProps> = ({
                       </span>
                     </div>
                     <h4 className="font-black text-sm text-slate-900 mt-1 truncate">
-                      {formatRegistryName(selectedParcelForDrawer.raiserName, registryPreferences.uppercaseNames)}
+                      {formatRegistryName(selectedParcelForDrawer.raiserName, registryPreferences.uppercaseNames)} · {farmLabel(selectedParcelForDrawer)}
                     </h4>
                   </div>
                   <button

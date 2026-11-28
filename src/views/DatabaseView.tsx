@@ -1,3 +1,4 @@
+import { farmLabel } from '../data/officeRegistry';
 import { formatRegistryDate, formatRegistryName } from '../data/registryPreferences';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
@@ -364,11 +365,11 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
       let matchesStatus = true;
       if (statusFilter === 'verified') {
-        matchesStatus = !p.isArchived && !p.is_archived;
+        matchesStatus = p.parcelVerificationStatus === 'Verified by MAO';
       } else if (statusFilter === 'pending') {
-        matchesStatus =
-          (p.healthStatus || '').toLowerCase().includes('pending') ||
-          Boolean((p as any).status && (p as any).status.toLowerCase().includes('pending'));
+        matchesStatus = (p.parcelVerificationStatus || 'Pending Verification') === 'Pending Verification';
+      } else if (statusFilter === 'flagged') {
+        matchesStatus = p.parcelVerificationStatus === 'Flagged / Needs Revision';
       } else if (statusFilter === 'irrigated') {
         matchesStatus = (p.purpose || '').toLowerCase().includes('irrigated');
       } else if (statusFilter === 'rainfed') {
@@ -906,7 +907,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
             )}
           </div>
           <p className="text-xs text-gov-muted mt-1 max-w-3xl leading-relaxed">
-            Centralized Silago rice registry with immutable Parcel Tag IDs, RSBSA verification, automated farm area recalculations, and dynamic georeferenced tracking.
+            Manage farmer records, farm parcels, and MAO verification.
           </p>
         </div>
 
@@ -1117,7 +1118,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               {userAssigned && (
                 <option value="MY_ASSIGNED">📍 My Assigned ({userAssigned.join(', ')})</option>
               )}
-              <option value="ASSIGNED_10">⭐ 10 Assigned Barangays (Consolidated)</option>
+              <option value="ASSIGNED_10">Official barangays (consolidated)</option>
               <optgroup label="Silago Barangays">
                 {BARANGAYS.map((b) => (
                   <option key={b.name} value={b.name}>
@@ -1136,8 +1137,9 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               className="gov-input font-medium cursor-pointer"
             >
               <option value="all">All Statuses</option>
-              <option value="verified">Verified / Active Parcels</option>
-              <option value="pending">Pending Ground Inspection</option>
+              <option value="verified">Verified by MAO</option>
+              <option value="pending">Pending Verification</option>
+              <option value="flagged">Flagged / Needs Revision</option>
               <option value="irrigated">Irrigated Lowland (NIA)</option>
               <option value="rainfed">Rainfed Lowland</option>
               <option value="owner">Owner-Cultivated</option>
@@ -1663,6 +1665,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                           >
                             <span className="text-gov-muted text-[10px]">#</span>
                             <span>{parcel.swineNameOrId || parcel.tagNumber}</span>
+                            <span className="text-xs font-semibold text-emerald-800">{farmLabel(parcel)} · {parcel.parcelVerificationStatus || 'Pending Verification'}</span>
                           </button>
                           {(parcel.is_pending_sync || parcel.isPendingSync) && (
                             <span
@@ -2038,13 +2041,17 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const tag = parcelToDelete.tagNumber;
-                  const farmer = parcelToDelete.raiserName;
-                  deleteParcel(tag);
-                  setParcelToDelete(null);
-                  setActionNotice(`Farmer registration ${tag} (${farmer}) was successfully deleted.`);
-                  setTimeout(() => setActionNotice(null), 5000);
+                onClick={async () => {
+                  const { tagNumber, raiserName } = parcelToDelete;
+                  try {
+                    await deleteParcel(tagNumber);
+                    setActionNotice(`Farm parcel ${tagNumber} (${raiserName}) was deleted.`);
+                  } catch (error) {
+                    setActionNotice(error?.message || 'Unable to delete this farm parcel.');
+                  } finally {
+                    setParcelToDelete(null);
+                    setTimeout(() => setActionNotice(null), 5000);
+                  }
                 }}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
